@@ -69,7 +69,7 @@ def fetch_latest(timeout: float = 5.0) -> Release | None:
 def cached_latest(max_age: float = CHECK_EVERY, timeout: float = 2.5) -> Release | None:
     """Like fetch_latest, but asks GitHub at most once per max_age seconds."""
     try:
-        cached = json.loads(CHECK_FILE.read_text())
+        cached = json.loads(CHECK_FILE.read_text(encoding="utf-8"))
         if time.time() - cached["checked_at"] < max_age:
             return Release(**cached["release"]) if cached.get("release") else None
     except (OSError, ValueError, KeyError, TypeError):
@@ -77,7 +77,7 @@ def cached_latest(max_age: float = CHECK_EVERY, timeout: float = 2.5) -> Release
     release = fetch_latest(timeout=timeout)
     try:
         CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CHECK_FILE.write_text(json.dumps({"checked_at": time.time(), "release": asdict(release) if release else None}))
+        CHECK_FILE.write_text(json.dumps({"checked_at": time.time(), "release": asdict(release) if release else None}), encoding="utf-8")
     except OSError:
         pass
     return release

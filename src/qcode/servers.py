@@ -86,7 +86,7 @@ class ServerStore:
         self.servers: dict[str, Server] = {}
         self.active = ""
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.servers = {n: Server(n, **v) for n, v in data.get("servers", {}).items()}
             self.active = data.get("active", "")
         if not self.servers and seed:
@@ -136,4 +136,4 @@ class ServerStore:
             "active": self.active,
             "servers": {n: {"base_url": s.base_url, "api_key": s.api_key} for n, s in self.servers.items()},
         }
-        self.path.write_text(json.dumps(data, indent=2) + "\n")
+        self.path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

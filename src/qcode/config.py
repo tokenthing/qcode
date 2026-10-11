@@ -75,8 +75,8 @@ class Config:
 def load_config(path: Path = CONFIG_FILE) -> Config:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(DEFAULT_TOML)
-    data = tomllib.loads(path.read_text())
+        path.write_text(DEFAULT_TOML, encoding="utf-8")
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     known = {k: v for k, v in data.items() if k in Config.__dataclass_fields__}
     cfg = Config(**known)
     cfg.base_url = os.environ.get("QCODE_BASE_URL", cfg.base_url)
@@ -109,7 +109,7 @@ def set_config_value(key: str, value, path: Path = CONFIG_FILE) -> None:
     """Write a top-level `key = value` into config.toml, keeping comments and other settings."""
     literal = str(value) if isinstance(value, int) else json.dumps(value)
     line = f"{key} = {literal}"
-    text = path.read_text() if path.exists() else DEFAULT_TOML
+    text = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_TOML
     table = re.search(r"(?m)^\[", text)
     head, tail = (text[: table.start()], text[table.start() :]) if table else (text, "")
     pattern = re.compile(rf"(?m)^{re.escape(key)}\s*=[^\n]*$")
@@ -118,7 +118,7 @@ def set_config_value(key: str, value, path: Path = CONFIG_FILE) -> None:
     else:
         head = head.rstrip("\n") + f"\n{line}\n\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(head + tail)
+    path.write_text(head + tail, encoding="utf-8")
 
 
 def project_settings_file(root: Path) -> Path:
@@ -130,7 +130,7 @@ def _read_project_settings(root: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -145,7 +145,7 @@ def save_project_allow(root: Path, rules: list[str]) -> None:
     data["allow"] = list(rules)
     path = project_settings_file(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def add_project_allow(root: Path, rule: str) -> None:

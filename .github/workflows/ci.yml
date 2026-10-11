@@ -21,3 +21,34 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
       - run: python scripts/build_installer.py --generic
+
+  installer:
+    # Runs the real single-file installer end to end on each OS (no model server needed).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/build_installer.py --generic
+      - name: Install
+        run: python dist/install_qcode.py --yes --server 127.0.0.1 --name ci
+      - name: Run the installed command (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: ~/.local/bin/qcode --help && grep -q 127.0.0.1 ~/.config/qcode/servers.json
+      - name: Run the installed command (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:LOCALAPPDATA\qcode\bin\qcode.cmd" --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if ($userPath -notlike "*qcode\bin*") { Write-Error "qcode bin dir not on user PATH"; exit 1 }
+      - name: Reinstall keeps settings, then uninstall
+        run: |
+          python dist/install_qcode.py --yes
+          python dist/install_qcode.py --uninstall --purge

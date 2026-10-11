@@ -103,7 +103,7 @@ PT_STYLE = Style.from_dict({
 
 def git_branch(root: Path) -> str | None:
     try:
-        head = (root / ".git" / "HEAD").read_text().strip()
+        head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:
         return None
     return head.removeprefix("ref: refs/heads/") if head.startswith("ref:") else head[:7]
@@ -665,7 +665,7 @@ class Repl:
     def cmd_memory(self, _: str) -> None:
         path = project_memory_path(self.agent.root)
         if not path.exists():
-            path.write_text("# Project notes for qcode\n\n")
+            path.write_text("# Project notes for qcode\n\n", encoding="utf-8")
         self._open_editor(path)
         self.agent.refresh_system()
         self.ui.ok(f"Reloaded {path.name}.")

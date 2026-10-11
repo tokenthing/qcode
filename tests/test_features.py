@@ -135,3 +135,14 @@ def test_fetch_latest_offline(monkeypatch):
 
     monkeypatch.setattr(updater.httpx, "get", boom)
     assert updater.fetch_latest() is None
+
+
+def test_sessions_and_config_round_trip_non_ascii(root, tmp_path):
+    agent, *_ = make_agent(root, [("Ça marche 🎉 — 完成", [])])
+    agent.run("héllo wörld ✓")
+    agent2, *_ = make_agent(root, [])
+    agent2.load_session(agent.session_path)
+    assert agent2.messages[-1]["content"] == "Ça marche 🎉 — 完成"
+    path = tmp_path / "config.toml"
+    config.set_config_value("model", "modèle-✓", path)
+    assert config.load_config(path).model == "modèle-✓"

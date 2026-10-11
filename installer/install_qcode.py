@@ -75,6 +75,13 @@ ARGS = None  # parsed command line
 
 
 # --- pretty output ---------------------------------------------------------------
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
 def _supports_color():
     if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
         return False
@@ -156,7 +163,7 @@ def describe_machine():
         system = model
     elif not IS_WIN and not IS_MAC:
         try:
-            for line in Path("/etc/os-release").read_text().splitlines():
+            for line in Path("/etc/os-release").read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("PRETTY_NAME="):
                     system = line.split("=", 1)[1].strip('"')
         except OSError:
@@ -184,7 +191,7 @@ def get_source():
     here = Path(__file__).resolve().parent
     for candidate in (here, here.parent):
         pyproject = candidate / "pyproject.toml"
-        if pyproject.exists() and 'name = "qcode"' in pyproject.read_text():
+        if pyproject.exists() and 'name = "qcode"' in pyproject.read_text(encoding="utf-8"):
             return candidate
     die(
         "This installer doesn't contain the qcode source.",
@@ -378,11 +385,11 @@ def add_to_path():
         else:
             rc_files = [home / ".profile"]
     for rc in rc_files:
-        existing = rc.read_text() if rc.exists() else ""
+        existing = rc.read_text(encoding="utf-8", errors="replace") if rc.exists() else ""
         if PATH_MARKER in existing:
             continue
         rc.parent.mkdir(parents=True, exist_ok=True)
-        with rc.open("a") as f:
+        with rc.open("a", encoding="utf-8") as f:
             f.write("\n%s\n%s\n" % (PATH_MARKER, line))
         ok("Added %s to PATH in %s" % (BIN_DIR, rc))
     return True
@@ -519,11 +526,11 @@ import re, sys
 from qcode import config
 from qcode.servers import Server, ServerStore
 url, model, name = sys.argv[1:4]
-text = config.CONFIG_FILE.read_text() if config.CONFIG_FILE.exists() else config.DEFAULT_TOML
+text = config.CONFIG_FILE.read_text(encoding="utf-8") if config.CONFIG_FILE.exists() else config.DEFAULT_TOML
 text = re.sub(r'(?m)^base_url = .*$', 'base_url = "%s"' % url, text)
 text = re.sub(r'(?m)^model = .*$', 'model = "%s"' % model, text)
 config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-config.CONFIG_FILE.write_text(text)
+config.CONFIG_FILE.write_text(text, encoding="utf-8")
 store = ServerStore(seed=Server(name, url))
 if store.get(name) is None or store.get(name).base_url != url:
     store.add(name, url)

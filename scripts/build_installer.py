@@ -39,16 +39,16 @@ def main() -> None:
         for path in source_files():
             zf.write(path, path.relative_to(ROOT).as_posix())
     encoded = "\n".join(textwrap.wrap(base64.b64encode(buf.getvalue()).decode(), 100))
-    text = replace_once(TEMPLATE.read_text(), "PAYLOAD = None\n", f'PAYLOAD = """\n{encoded}\n"""\n')
+    text = replace_once(TEMPLATE.read_text(encoding="utf-8"), "PAYLOAD = None\n", f'PAYLOAD = """\n{encoded}\n"""\n')
 
-    defaults = {} if generic or not DEFAULTS.exists() else json.loads(DEFAULTS.read_text())
+    defaults = {} if generic or not DEFAULTS.exists() else json.loads(DEFAULTS.read_text(encoding="utf-8"))
     for key, const in DEFAULT_KEYS.items():
         if defaults.get(key):
             default_line = next(l for l in text.splitlines() if l.startswith(f"{const} = "))
             text = replace_once(text, default_line + "\n", f"{const} = {json.dumps(defaults[key])}\n")
 
     OUT.parent.mkdir(exist_ok=True)
-    OUT.write_text(text)
+    OUT.write_text(text, encoding="utf-8")
     which = "generic" if not defaults else f"defaults from {DEFAULTS.relative_to(ROOT)}"
     print(f"wrote {OUT.relative_to(ROOT)} ({OUT.stat().st_size // 1024} KB, {which})")
 

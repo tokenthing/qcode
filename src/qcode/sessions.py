@@ -38,11 +38,11 @@ def save(path: Path, root: Path, model: str, messages: list[dict]) -> None:
         "updated": datetime.datetime.now().isoformat(timespec="seconds"),
         "messages": body,
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def load(path: Path) -> dict:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def list_sessions(root: Path | None = None, limit: int = 10) -> list[SessionInfo]:
