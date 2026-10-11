@@ -1,0 +1,63 @@
+"""Session persistence: every turn is autosaved; --resume / /resume reload it."""
+
+from __future__ import annotations
+
+import datetime
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from .config import DATA_DIR
+
+SESSIONS_DIR = DATA_DIR / "sessions"
+
+
+@dataclass
+class SessionInfo:
+    path: Path
+    root: str
+    model: str
+    updated: str
+    first_prompt: str
+
+
+def new_session_path() -> Path:
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return SESSIONS_DIR / f"{stamp}.json"
+
+
+def save(path: Path, root: Path, model: str, messages: list[dict]) -> None:
+    # Skip the system prompt; it's rebuilt on resume.
+    body = [m for m in messages if m["role"] != "system"]
+    if not body:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "root": str(root),
+        "model": model,
+        "updated": datetime.datetime.now().isoformat(timespec="seconds"),
+        "messages": body,
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def list_sessions(root: Path | None = None, limit: int = 10) -> list[SessionInfo]:
+    if not SESSIONS_DIR.exists():
+        return []
+    out = []
+    for p in sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = load(p)
+        except (json.JSONDecodeError, OSError):
+            continue
+        if root is not None and data.get("root") != str(root):
+            continue
+        first = next((m.get("content") or "" for m in data["messages"] if m["role"] == "user"), "")
+        out.append(SessionInfo(p, data["root"], data.get("model", ""), data.get("updated", ""), first.splitlines()[0][:70] if first else ""))
+        if len(out) >= limit:
+            break
+    return out
