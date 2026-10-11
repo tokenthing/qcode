@@ -26,7 +26,7 @@ Run it again to reinstall. Flags: `--yes`, `--server ADDR --name NAME --model M`
 
 **Sharing with family or friends:** create `installer/defaults.json` (it's git-ignored):
 ```json
-{"server": "192.168.1.50", "server_name": "home", "zerotier_network": "0123456789abcdef"}
+{"server": "192.186.1.50", "server_name": "home", "zerotier_network": "0123456789abcdef"}
 ```
 Then run `python3 scripts/build_installer.py`. `dist/install_qcode.py` will have your server and network pre-filled.
 
