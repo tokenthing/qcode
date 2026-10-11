@@ -443,18 +443,29 @@ def print_servers(rows: list[tuple[bool, object, object]]) -> None:
     console.print(Text("  /server <name> to switch · /add_api_server <name> <ip> to add · /remove_api_server <name>", style=MUTED))
 
 
-def print_models(rows: list[tuple[bool, str, int]], server: str) -> None:
+CTX_SOURCES = {"model": "set on model", "loaded": "running now", "ollama-default": "Ollama default"}
+
+
+def print_models(rows: list[tuple[bool, str, int, int | None, str]], server: str) -> None:
     t = _table()
-    for col in ("", "model", "context"):
-        t.add_column(col, justify="right" if col == "context" else "left", no_wrap=True)
-    for current, name, ctx in rows:
+    for col, justify in (("", "left"), ("model", "left"), ("context", "right"), ("max", "right"), ("", "left")):
+        t.add_column(col, justify=justify, no_wrap=True)
+    limited = False
+    for current, name, ctx, maximum, source in rows:
+        below_max = bool(maximum and maximum > ctx)
+        limited |= below_max and source != "model"
         t.add_row(
             Text("❯", style=ACCENT) if current else "",
             Text(name, style=f"bold {ACCENT}" if current else ""),
-            Text(f"{ctx:,}", style=MUTED),
+            Text(f"{ctx:,}", style=WARN if below_max and source != "model" else ""),
+            Text(f"{maximum:,}" if maximum else "–", style=MUTED),
+            Text(CTX_SOURCES.get(source, "config/guess"), style=MUTED),
         )
     console.print(Padding(t, (1, 0, 0, 2)))
     console.print(Text(f"  on {server} · /model <name> to switch", style=MUTED))
+    if limited:
+        console.print(Text("  Yellow = Ollama is using less context than the model supports. Raise it with a Modelfile "
+                           "(PARAMETER num_ctx) or OLLAMA_CONTEXT_LENGTH on the server.", style=MUTED))
 
 
 def print_status(rows: list[tuple[str, RenderableType]]) -> None:

@@ -10,6 +10,16 @@ import httpx
 from openai import OpenAI
 
 
+OLLAMA_DEFAULT_CTX = 4096  # what Ollama uses when neither the model nor OLLAMA_CONTEXT_LENGTH sets num_ctx
+
+
+@dataclass
+class ContextInfo:
+    effective: int | None  # tokens the server will actually use
+    maximum: int | None    # what the model was trained for
+    source: str            # "model" (num_ctx set), "loaded" (running now), "ollama-default", or "" (unknown server)
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -27,17 +37,30 @@ class LLMClient:
     def list_models(self) -> list[str]:
         return sorted(m.id for m in self._client.models.list())
 
-    def context_length(self, model: str) -> int | None:
-        """The num_ctx an Ollama model was built with, or None if the server doesn't say."""
+    def context_info(self, model: str) -> ContextInfo:
+        """Ask Ollama how much context `model` really gets. Non-Ollama servers return an unknown ContextInfo."""
         root = self.base_url.rstrip("/").removesuffix("/v1")
         try:
             r = httpx.post(f"{root}/api/show", json={"model": model}, timeout=3)
             if r.status_code != 200:
-                return None
-            m = re.search(r"\bnum_ctx\s+(\d+)", r.json().get("parameters") or "")
+                return ContextInfo(None, None, "")
+            show = r.json()
         except (httpx.HTTPError, ValueError):
-            return None
-        return int(m.group(1)) if m else None
+            return ContextInfo(None, None, "")
+        maximum = next((int(v) for k, v in (show.get("model_info") or {}).items() if k.endswith(".context_length")), None)
+        m = re.search(r"\bnum_ctx\s+(\d+)", show.get("parameters") or "")
+        if m:
+            return ContextInfo(int(m.group(1)), maximum, "model")
+        # Not set on the model: if it's loaded, Ollama tells us what it's running with (covers OLLAMA_CONTEXT_LENGTH).
+        try:
+            loaded = httpx.get(f"{root}/api/ps", timeout=3).json().get("models", [])
+        except (httpx.HTTPError, ValueError):
+            loaded = []
+        names = {model, f"{model}:latest"}
+        for entry in loaded:
+            if (entry.get("name") in names or entry.get("model") in names) and entry.get("context_length"):
+                return ContextInfo(int(entry["context_length"]), maximum, "loaded")
+        return ContextInfo(OLLAMA_DEFAULT_CTX, maximum, "ollama-default")
 
     def complete(self, model: str, messages: list[dict]) -> str:
         resp = self._client.chat.completions.create(model=model, messages=messages)

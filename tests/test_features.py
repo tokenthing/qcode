@@ -146,3 +146,30 @@ def test_sessions_and_config_round_trip_non_ascii(root, tmp_path):
     path = tmp_path / "config.toml"
     config.set_config_value("model", "modèle-✓", path)
     assert config.load_config(path).model == "modèle-✓"
+
+
+# --- context size -------------------------------------------------------------------
+class _CtxClient:
+    base_url = "http://ollama/v1"
+
+    def __init__(self, info):
+        self.info = info
+
+    def context_info(self, model):
+        return self.info
+
+
+@pytest.mark.parametrize("info,models,expected", [
+    (("model", 14336), {}, 14336),                           # num_ctx baked into the model
+    (("loaded", 8192), {"m": {"num_ctx": 32768}}, 8192),     # what's actually running beats config
+    (("ollama-default", 4096), {}, 4096),                    # unconfigured Ollama model: 4096, not a guess
+    (("ollama-default", 4096), {"m": {"num_ctx": 16000}}, 16000),  # user config beats the default
+    (("", None), {}, config.DEFAULT_NUM_CTX),                 # non-Ollama server, nothing known
+])
+def test_context_for_sources(root, info, models, expected):
+    from qcode.client import ContextInfo
+
+    agent, *_ = make_agent(root, [])
+    agent.config.models = models
+    agent.client = _CtxClient(ContextInfo(info[1], 32768, info[0]))
+    assert agent.context_for("m") == expected

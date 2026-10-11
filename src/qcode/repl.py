@@ -521,7 +521,12 @@ class Repl:
         try:
             with self.ui.spinner("Fetching models…"):
                 available = [strip_latest(m) for m in self.agent.client.list_models()]
-                rows = [(m == strip_latest(self.agent.model), m, self.agent.context_for(m)) for m in available]
+                probe = getattr(self.agent.client, "context_info", None)
+                rows = []
+                for m in available:
+                    info = probe(m) if probe else None
+                    rows.append((m == strip_latest(self.agent.model), m, self.agent.context_for(m),
+                                 info.maximum if info else None, info.source if info else ""))
         except APIError as e:
             self.ui.error(f"Couldn't list models on {self.server.name}: {getattr(e, 'message', e)}")
             return
@@ -808,8 +813,8 @@ class Repl:
             with ThreadPoolExecutor(max_workers=8) as pool:
                 pings = dict(zip((s.name for s in servers), pool.map(ping, servers)))
             current = pings.get(self.server.name) or ping(self.server)
-            probe = getattr(self.agent.client, "context_length", None)
-            server_ctx = probe(self.agent.model) if (current.ok and probe) else None
+            probe = getattr(self.agent.client, "context_info", None)
+            ctx_info = probe(self.agent.model) if (current.ok and probe) else None
         if release is None:
             rows.append(("warn", "updates", f"couldn't check GitHub ({updater.REPO})"))
         elif updater.is_newer(release):
@@ -829,8 +834,15 @@ class Repl:
         if current.ok:
             have = strip_latest(self.agent.model) in [strip_latest(m) for m in current.models]
             rows.append(("ok" if have else "bad", "model", self.agent.model + ("" if have else f" isn't on {self.server.name} · /model")))
-            where_from = "(reported by the server)" if server_ctx else '(fallback; set [models."<name>"] num_ctx in config.toml)'
-            rows.append(("ok" if server_ctx else "warn", "context", f"{self.agent.num_ctx:,} tokens {where_from}"))
+            source = ctx_info.source if ctx_info else ""
+            where_from = {
+                "model": "(num_ctx set on the model)",
+                "loaded": "(what Ollama is running it with)",
+                "ollama-default": "(Ollama's default; the model isn't configured)",
+            }.get(source, '(guess; set [models."<name>"] num_ctx in config.toml)')
+            maximum = ctx_info.maximum if ctx_info else None
+            room = f" · model supports {maximum:,}" if maximum and maximum > self.agent.num_ctx else ""
+            rows.append(("ok" if source in ("model", "loaded") else "warn", "context", f"{self.agent.num_ctx:,} tokens {where_from}{room}"))
         zt = zerotier_cli()
         rows.append(("ok" if zt else "info", "ZeroTier", "installed" if zt else "not installed (only needed for ZeroTier servers)"))
         git = shutil.which("git")

@@ -80,12 +80,25 @@ class Agent:
         sessions.save(self.session_path, self.root, self.model, self.messages)
 
     def context_for(self, model: str) -> int:
-        """Context window: what the server reports (Ollama num_ctx), else config, else a default."""
+        """Context window, best source first: the model's num_ctx, what Ollama is running it with,
+        [models."<name>"] in config.toml, Ollama's default, and finally a generic guess."""
         key = (getattr(self.client, "base_url", ""), model)
-        if key not in self._ctx_cache:
-            probe = getattr(self.client, "context_length", None)
-            self._ctx_cache[key] = (probe(model) if probe else None) or self.config.num_ctx(model)
-        return self._ctx_cache[key]
+        if key in self._ctx_cache:
+            return self._ctx_cache[key]
+        probe = getattr(self.client, "context_info", None)
+        info = probe(model) if probe else None
+        configured = model.removesuffix(":latest") in self.config.models
+        if info and info.source in ("model", "loaded"):
+            n = info.effective
+        elif configured:
+            n = self.config.num_ctx(model)
+        elif info and info.source == "ollama-default":
+            n = info.effective
+        else:
+            n = self.config.num_ctx(model)
+        if info is None or info.source in ("model", ""):
+            self._ctx_cache[key] = n  # fixed for this model; the others can change once it loads
+        return n
 
     @property
     def num_ctx(self) -> int:
