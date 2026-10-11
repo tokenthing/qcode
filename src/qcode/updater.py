@@ -99,8 +99,11 @@ def install_kind() -> tuple[str, str]:
 
 def install(release: Release) -> tuple[bool, str]:
     """pip-install the release into the Python running qcode. Returns (ok, output tail)."""
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--disable-pip-version-check", "--quiet", release.archive_url]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    pip = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--quiet"]
+    proc = subprocess.run(pip + ["--upgrade", release.archive_url], capture_output=True, text=True)
+    if proc.returncode == 0:
+        # pip skips packages whose version it already has; always lay down this release's code.
+        proc = subprocess.run(pip + ["--force-reinstall", "--no-deps", release.archive_url], capture_output=True, text=True)
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
     if proc.returncode == 0:
         CHECK_FILE.unlink(missing_ok=True)
