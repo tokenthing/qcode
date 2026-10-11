@@ -20,7 +20,10 @@ cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:11434"
 Environment="OLLAMA_KEEP_ALIVE=-1"
+# One model in VRAM at a time (switching models swaps them), one request at a time
+# (a 2nd user waits instead of doubling KV-cache memory and spilling the model to CPU).
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
+Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_FLASH_ATTENTION=1"
 Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 EOF

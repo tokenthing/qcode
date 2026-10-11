@@ -94,7 +94,14 @@ ollama pull qwen2.5-coder:14b
 ollama create qcoder-14b -f server/Modelfile.qcoder14     # bakes in the context size
 sudo ZT_IFACE=<zt-interface> bash server/setup-server.sh  # listen on the network, firewall to ZeroTier only
 ```
-`setup-server.sh` also enables flash attention and a q8_0 KV cache, which halves context memory. On an 11GB GTX 1080 Ti, the 14B model fits 14k context fully on the GPU at about 24 tok/s, and the 7B fits 32k at about 50 tok/s.
+`setup-server.sh` keeps one model in VRAM at a time (switching swaps it) and serves one request at a time (a second user briefly waits instead of pushing the model onto the CPU). It also enables flash attention and a q8_0 KV cache, which halves context memory.
+
+To give every model the largest context that still fits fully on the GPU:
+```sh
+python3 server/tune-context.py            # measure only
+python3 server/tune-context.py --apply    # bake the result into each model (num_ctx)
+```
+Re-run it after `ollama pull`, because pulling resets a model's settings. On an 11GB GTX 1080 Ti, the 14B model fits 14k context fully on the GPU at about 24 tok/s, and the 7B fits 32k at about 50 tok/s.
 
 ## How it works
 
