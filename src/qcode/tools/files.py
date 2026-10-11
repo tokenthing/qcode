@@ -54,6 +54,8 @@ def _apply_edit(ctx: ToolContext, args: dict) -> tuple[str, str]:
     old_s, new_s = args["old_string"], args["new_string"]
     if old_s == new_s:
         raise ToolError("old_string and new_string are identical")
+    if not ctx.resolve(args["path"]).exists():
+        raise ToolError(f"{args['path']} does not exist. To create a new file, call write_file with path and content.")
     text = _read_text(ctx, args["path"])
     count = text.count(old_s)
     if count == 0:

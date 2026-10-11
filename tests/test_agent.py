@@ -130,3 +130,31 @@ def test_bare_json_call_not_kept_as_content(root):
     agent.run("ls")
     assert agent.messages[2]["content"] == ""
     assert agent.messages[2]["tool_calls"][0]["function"]["name"] == "list_dir"
+
+
+def test_llama_style_call_after_prose_with_wrong_param_name(root):
+    agent, client, ui = make_agent(root, [
+        ('I\'ll create it.\n{"name": "write_file", "parameters": {"new_string": "<h1>hi</h1>", "path": "page.html"}}', []),
+        ("Created page.html.", []),
+    ])
+    agent.run("make a page")
+    assert (root / "page.html").read_text() == "<h1>hi</h1>"
+    assert agent.messages[2]["content"] == "I'll create it."
+
+
+def test_malformed_call_gets_one_repair_round(root):
+    agent, client, ui = make_agent(root, [
+        ('{"name": "write_file", "arguments": {"path": "a.txt", "content": "unterminated', []),
+        ('{"name": "write_file", "arguments": {"path": "a.txt", "content": "fixed"}}', []),
+        ("done", []),
+    ])
+    agent.run("write a.txt")
+    assert (root / "a.txt").read_text() == "fixed"
+    assert "couldn't be used" in agent.messages[3]["content"]
+
+
+def test_repairs_are_capped(root):
+    bad = ('{"name": "write_file", "arguments": {"content": "x', [])
+    agent, client, ui = make_agent(root, [bad, bad, bad, ("never reached", [])])
+    agent.run("go")
+    assert len(client.responses) == 1  # original + 2 repairs, then it stops

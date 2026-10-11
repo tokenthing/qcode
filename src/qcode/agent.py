@@ -16,10 +16,11 @@ from .context import COMPACT_THRESHOLD, estimate_tokens, transcript, truncate
 from .memory import load_memory
 from .permissions import Permissions
 from .prompts import COMPACT_PROMPT, build_system_prompt
-from .toolparse import extract_text_tool_calls
-from .tools import ALL_TOOLS, ToolContext, ToolError
+from .toolparse import broken_call_error, extract_text_tool_calls
+from .tools import ALL_TOOLS, ToolContext, ToolError, normalize_args
 
 DENIED = "The user denied this tool call. Stop and wait for their instructions."
+MAX_REPAIRS = 2  # times per turn we ask the model to rewrite a tool call we couldn't read
 FILE_TOOLS = ("write_file", "edit_file")
 
 
@@ -137,6 +138,7 @@ class Agent:
 
     def _loop(self, stats: TurnStats) -> None:
         schemas = [t.schema() for t in self.tools.values()]
+        repairs = 0
         for _ in range(self.config.max_steps):
             self.maybe_compact()
             self.ui.stream_start()
@@ -161,6 +163,16 @@ class Agent:
                 ]
             self.messages.append(msg)
             if not calls:
+                problem = broken_call_error(content, set(self.tools))
+                if problem and repairs < MAX_REPAIRS:
+                    repairs += 1
+                    self.ui.warn(f"The model's tool call couldn't be used: {problem}. Asking it to try again…")
+                    self.messages.append({"role": "user", "content": (
+                        f"Your tool call couldn't be used: {problem}. Send it again as one valid JSON object, "
+                        'exactly like {"name": "write_file", "arguments": {"path": "page.html", "content": "..."}} '
+                        "with quotes and newlines inside strings escaped (\\n, \\\")."
+                    )})
+                    continue
                 return
 
             for i, call in enumerate(calls):
@@ -185,6 +197,7 @@ class Agent:
                 raise ValueError("arguments must be a JSON object")
         except (json.JSONDecodeError, ValueError) as e:
             return f"Error: invalid arguments JSON ({e})", False
+        args = normalize_args(tool, args)
 
         self.ui.tool_call(call.name, args)
         preview, asked = None, False

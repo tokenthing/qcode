@@ -69,3 +69,18 @@ def test_bash(root):
     out = run(root, "bash", command="echo hi && " + ("cd" if os.name == "nt" else "pwd"))
     assert out.startswith("exit code 0") and "hi" in out and str(root) in out
     assert run(root, "bash", command="exit 3").startswith("exit code 3")
+
+
+def test_normalize_args_fixes_common_wrong_names():
+    from qcode.tools import normalize_args
+    write = ALL_TOOLS["write_file"]
+    assert normalize_args(write, {"file_path": "a", "new_string": "x"}) == {"path": "a", "content": "x"}
+    edit = ALL_TOOLS["edit_file"]
+    # new_string is a real edit_file parameter, so it must not be renamed there
+    assert normalize_args(edit, {"filename": "a", "old_str": "x", "new_string": "y"}) == {"path": "a", "old_string": "x", "new_string": "y"}
+    assert normalize_args(ALL_TOOLS["bash"], {"cmd": "ls"}) == {"command": "ls"}
+
+
+def test_edit_missing_file_points_to_write_file(root):
+    with pytest.raises(ToolError, match="call write_file"):
+        run(root, "edit_file", path="new.html", old_string="", new_string="<html>")
