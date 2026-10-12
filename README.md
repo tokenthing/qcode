@@ -96,6 +96,7 @@ On Ollama this updates the model on the server, so it applies to everyone using 
 | **Project** | `/diff` (uncommitted git changes) `/init` (write QCODE.md) `/memory` `/cwd` |
 | **Settings** | `/settings` (menu) · `/mode [ask\|auto-edit\|auto\|plan]` · `/context set <tokens>` · `/config` · `/config set <key> <value>` · `/config edit` · `/permissions [reset\|remove n]` · `/tools` |
 | **App** | `/status` `/doctor` (diagnostics) `/version` `/update` `/help` `/exit` |
+| **Command line** | `qcode bench` — score models (see below) |
 | **Shell** | `!git status` runs a command directly; its output is sent along with your next message |
 
 Tab completes commands, subcommands, server names, model names and setting keys.
@@ -119,6 +120,22 @@ num_ctx = 32768
 - `~/.config/qcode/config.toml` holds every setting from `/settings`, the allow rules and per-model context sizes for non-Ollama servers. Each line is commented.
 - Per-project approvals are saved in `.qcode/settings.json`.
 - `QCODE.md` in the project root (and `~/.config/qcode/QCODE.md`) is added to the system prompt. Use `/init` to generate one.
+
+## Benchmarking models
+
+Which model should you actually use? `qcode bench` runs 10 small, self-checking coding tasks against your models and scores them:
+
+```sh
+qcode bench                                  # your default model
+qcode bench --models qcoder-14b,qwen3,llama3.1
+qcode bench --models all --repeat 3          # every model, 3 tries each (fairer, slower)
+qcode bench --tasks fix_bug,surgical_edit    # just some tasks   (qcode bench --list shows them)
+qcode bench --history                        # scores from earlier runs
+```
+
+The tasks cover creating files, fixing a bug until the tests pass, adding a function, a one-line change to a 120-line file *without wiping the rest*, finding a definition, renaming across files, running a script and reporting its output, creating HTML, editing JSON while keeping the other keys, and reading a file instead of guessing. Each task runs in a throwaway folder with approvals on auto. Dangerous shell commands (`sudo`, paths outside the folder, network tools…) are blocked.
+
+The scoreboard shows the pass rate, average time, tokens per second, failed tool calls, unreadable tool calls, nudges and how much of the model fits on the GPU. A per-task grid compares models side by side. Results are saved as JSON in `~/.local/share/qcode/bench/`.
 
 ## Hosting the model (Ollama + ZeroTier)
 

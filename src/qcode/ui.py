@@ -542,8 +542,8 @@ def print_help(groups: list[tuple[str, list[tuple[str, str]]]]) -> None:
     console.print(Text("  Keys: tab completes · esc+enter newline · ↑ history · ctrl+c interrupts · ctrl+d quits", style=MUTED))
 
 
-def _table() -> Table:
-    return Table(box=box.SIMPLE_HEAD, header_style=f"bold {MUTED}", show_edge=False, pad_edge=False, padding=(0, 2))
+def _table(padding: int = 2) -> Table:
+    return Table(box=box.SIMPLE_HEAD, header_style=f"bold {MUTED}", show_edge=False, pad_edge=False, padding=(0, padding))
 
 
 def print_servers(rows: list[tuple[bool, object, object]]) -> None:
@@ -601,8 +601,8 @@ def _cell(value) -> RenderableType:
     return Text(value) if isinstance(value, str) else value
 
 
-def print_table(columns: list[tuple[str, dict]], rows: list[tuple], footer: str | None = None) -> None:
-    t = _table()
+def print_table(columns: list[tuple[str, dict]], rows: list[tuple], footer: str | None = None, padding: int = 2) -> None:
+    t = _table(padding)
     for name, opts in columns:
         t.add_column(name, **opts)
     for row in rows:

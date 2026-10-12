@@ -1,4 +1,4 @@
-"""Entry point: `qcode`."""
+"""Entry point: `qcode` (interactive) and `qcode bench`."""
 
 from __future__ import annotations
 
@@ -16,11 +16,24 @@ from .repl import Repl
 from .servers import Server, ServerStore, normalize_url
 from .ui import TerminalUI
 
-app = typer.Typer(add_completion=False, help="A terminal coding agent for your self-hosted Qwen2.5-Coder.")
+app = typer.Typer(add_completion=False, help="A terminal coding agent for your self-hosted models.")
 
 
-@app.command()
+def pick_server(config, server_name: Optional[str], base_url: Optional[str]) -> tuple[ServerStore, Server]:
+    store = ServerStore(seed=Server("home", normalize_url(config.base_url), config.api_key))
+    if base_url:
+        return store, Server("custom", normalize_url(base_url), config.api_key)
+    if server_name:
+        server = store.get(server_name)
+        if server is None:
+            raise typer.BadParameter(f"no server named {server_name!r}; known: {', '.join(sorted(store.servers))}", param_hint="--server")
+        return store, server
+    return store, store.current
+
+
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     prompt: Optional[str] = typer.Option(None, "-p", "--prompt", help="Run one prompt and exit."),
     model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use (overrides config)."),
     server_name: Optional[str] = typer.Option(None, "-s", "--server", help="Saved server to use (see /servers)."),
@@ -30,19 +43,12 @@ def main(
     yolo: bool = typer.Option(False, "--yolo", help="Same as --mode auto: approve every tool call without asking."),
     cwd: Path = typer.Option(Path.cwd(), "--cwd", help="Project root (default: current directory)."),
 ) -> None:
+    if ctx.invoked_subcommand:
+        return
     config = load_config()
     if model:
         config.model = model
-    store = ServerStore(seed=Server("home", normalize_url(config.base_url), config.api_key))
-
-    if base_url:
-        server = Server("custom", normalize_url(base_url), config.api_key)
-    elif server_name:
-        server = store.get(server_name)
-        if server is None:
-            raise typer.BadParameter(f"no server named {server_name!r}; known: {', '.join(sorted(store.servers))}", param_hint="--server")
-    else:
-        server = store.current
+    store, server = pick_server(config, server_name, base_url)
 
     root = cwd.resolve()
     ui = TerminalUI()
@@ -68,6 +74,106 @@ def main(
         repl.ask(prompt)
         return
     repl.run()
+
+
+@app.command()
+def bench(
+    models: str = typer.Option("", "--models", "-m", help="Comma-separated models, or 'all'. Default: your configured model."),
+    tasks: str = typer.Option("", "--tasks", "-t", help="Comma-separated task names (see --list). Default: all."),
+    repeat: int = typer.Option(1, "--repeat", "-n", min=1, max=10, help="Run each task this many times (more = fairer, slower)."),
+    timeout: int = typer.Option(240, "--timeout", min=30, help="Seconds allowed per task."),
+    max_steps: int = typer.Option(15, "--max-steps", min=1, help="Tool round trips allowed per task."),
+    server_name: Optional[str] = typer.Option(None, "-s", "--server", help="Saved server to use."),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="One-off server address."),
+    list_tasks: bool = typer.Option(False, "--list", help="List the tasks and exit."),
+    history: bool = typer.Option(False, "--history", help="Show scores from earlier runs and exit."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before starting."),
+) -> None:
+    """Score models on small, self-checking coding tasks."""
+    from openai import APIConnectionError
+    from rich.text import Text
+
+    from . import ui
+    from .bench import TASKS, TASKS_BY_NAME
+    from .bench import runner
+
+    if list_tasks:
+        ui.print_table([("task", {"style": "bold", "no_wrap": True}), ("tests", {"style": ui.ACCENT2, "no_wrap": True}), ("prompt", {})],
+                       [(t.name, t.skill, t.prompt) for t in TASKS])
+        return
+    if history:
+        past = runner.load_history()
+        if not past:
+            ui.console.print(Text("  No benchmark runs yet. Try: qcode bench", style=ui.MUTED))
+            return
+        rows = []
+        for run in past:
+            for m in run["models"]:
+                s = m["summary"]
+                rows.append((run["date"].replace("T", " ")[:16], m["model"], f"{s['passed']}/{s['total']}",
+                             f"{s['avg_seconds']:.1f}s", f"{s['tokens_per_second']:.0f}", run.get("qcode", "")))
+        ui.print_table([("date", {"style": ui.MUTED}), ("model", {"style": "bold"}), ("passed", {"justify": "right"}),
+                        ("avg time", {"justify": "right"}), ("tok/s", {"justify": "right"}), ("qcode", {"style": ui.MUTED})], rows,
+                       footer=f"Full results: {runner.RESULTS_DIR}")
+        return
+
+    from .servers import ping
+
+    config = load_config()
+    _, server = pick_server(config, server_name, base_url)
+    client = LLMClient(server.base_url, server.api_key)
+    status = ping(server, timeout=5)
+    if not status.ok:
+        ui.console.print(Text(f"  ✗ Can't reach {server.name} ({server.address}): {status.error}. Is the server on and ZeroTier up?", style=ui.ERR))
+        raise typer.Exit(1)
+    available = [m.removesuffix(":latest") for m in status.models]
+
+    if models.strip().lower() == "all":
+        chosen = [m for m in available if "embed" not in m.lower()]
+    elif models:
+        chosen = [m.strip().removesuffix(":latest") for m in models.split(",") if m.strip()]
+    else:
+        chosen = [config.model.removesuffix(":latest")]
+    missing = [m for m in chosen if m not in available]
+    if missing:
+        raise typer.BadParameter(f"not on {server.name}: {', '.join(missing)}. Available: {', '.join(available)}", param_hint="--models")
+
+    picked = list(TASKS)
+    if tasks:
+        names = [t.strip() for t in tasks.split(",") if t.strip()]
+        unknown = [n for n in names if n not in TASKS_BY_NAME]
+        if unknown:
+            raise typer.BadParameter(f"unknown task(s): {', '.join(unknown)}. See qcode bench --list", param_hint="--tasks")
+        picked = [TASKS_BY_NAME[n] for n in names]
+
+    runs_total = len(chosen) * len(picked) * repeat
+    ui.console.print(Text.assemble(
+        ("\n  qcode bench  ", f"bold {ui.ACCENT}"),
+        (f"{len(picked)} task{'s' if len(picked) != 1 else ''} × {len(chosen)} model{'s' if len(chosen) != 1 else ''}"
+         + (f" × {repeat}" if repeat > 1 else "") + f" = {runs_total} runs on {server.name} ({server.address})", ui.MUTED),
+    ))
+    ui.console.print(Text("  Each task runs in a throwaway folder with approvals on auto; unsafe shell commands are blocked.", style=ui.MUTED))
+    ui.console.print(Text(f"  Usually 10–60s per run, so roughly {max(1, runs_total * 25 // 60)}–{max(2, runs_total)} minutes. Ctrl+C stops.", style=ui.MUTED))
+    if not yes and runs_total > 10 and ui.select("Start?", [("y", "Yes"), ("n", "No")], cancel="n") != "y":
+        return
+
+    runs: list = []
+    try:
+        runner.run_bench(
+            client, config, chosen, picked, repeat=repeat, timeout=timeout, max_steps=max_steps,
+            on_model=lambda run: (runs.append(run), runner.print_model_header(run)),
+            on_result=runner.print_result,
+        )
+    except KeyboardInterrupt:
+        ui.console.print(Text("\n  Stopped. Showing what finished.", style=ui.WARN))
+    except APIConnectionError:
+        ui.console.print(Text(f"\n  ✗ Lost the connection to {server.name}. Showing what finished.", style=ui.ERR))
+    runs = [r for r in runs if r.results]
+    if not runs:
+        return
+    runner.print_scoreboard(runs, picked, repeat)
+    path = runner.save_results(runs, server.base_url, picked, repeat)
+    ui.console.print(Text(f"\n  Saved to {path} · qcode bench --history to compare runs", style=ui.MUTED))
 
 
 if __name__ == "__main__":

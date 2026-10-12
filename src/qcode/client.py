@@ -120,27 +120,31 @@ class LLMClient:
         slots: dict[int, dict] = {}
         chunks = 0
         usage_tokens = 0
-        for chunk in self._client.chat.completions.create(**kwargs):
-            if chunk.usage:
-                usage_tokens = chunk.usage.completion_tokens or 0
-            if not chunk.choices:
-                continue
-            chunks += 1
-            delta = chunk.choices[0].delta
-            if delta.content:
-                content.append(delta.content)
-                on_text(delta.content)
-            for tc in delta.tool_calls or []:
-                key = tc.index if tc.index is not None else len(slots)
-                # Some servers send each complete call with index 0; a new id means a new call.
-                if key in slots and tc.id and slots[key]["id"] and slots[key]["id"] != tc.id:
-                    key = max(slots) + 1
-                slot = slots.setdefault(key, {"id": None, "name": "", "arguments": ""})
-                if tc.id:
-                    slot["id"] = tc.id
-                if tc.function:
-                    slot["name"] += tc.function.name or ""
-                    slot["arguments"] += tc.function.arguments or ""
+        stream = self._client.chat.completions.create(**kwargs)
+        try:
+            for chunk in stream:
+                if chunk.usage:
+                    usage_tokens = chunk.usage.completion_tokens or 0
+                if not chunk.choices:
+                    continue
+                chunks += 1
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    content.append(delta.content)
+                    on_text(delta.content)
+                for tc in delta.tool_calls or []:
+                    key = tc.index if tc.index is not None else len(slots)
+                    # Some servers send each complete call with index 0; a new id means a new call.
+                    if key in slots and tc.id and slots[key]["id"] and slots[key]["id"] != tc.id:
+                        key = max(slots) + 1
+                    slot = slots.setdefault(key, {"id": None, "name": "", "arguments": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function:
+                        slot["name"] += tc.function.name or ""
+                        slot["arguments"] += tc.function.arguments or ""
+        finally:
+            stream.close()  # on Ctrl+C or a timeout, closing the connection makes Ollama stop generating
         self.last_completion_tokens = usage_tokens or chunks
         calls = [
             ToolCall(s["id"] or f"call_{i}", s["name"], s["arguments"] or "{}")

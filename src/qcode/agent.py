@@ -52,6 +52,8 @@ class TurnStats:
     tokens: int = 0
     ctx_used: int = 0
     ctx_limit: int = 0
+    repairs: int = 0  # malformed tool calls the model had to resend
+    nudges: int = 0   # times it announced an action without doing it
 
 
 @dataclass
@@ -77,6 +79,7 @@ class Agent:
         self._ctx_cache: dict[tuple[str, str], int] = {}
         self.checkpoints: list[Checkpoint] = []
         self._checkpoint: Checkpoint | None = None
+        self.last_stats: TurnStats | None = None
 
     # --- setup / state ------------------------------------------------------------
     def _system_message(self) -> dict:
@@ -141,6 +144,7 @@ class Agent:
         """Run one user turn. `label` is what /undo shows for it (defaults to user_text)."""
         start_len = len(self.messages)
         stats = TurnStats(self.model)
+        self.last_stats = stats  # readable even if the turn ends in an exception
         started = time.monotonic()
         self._checkpoint = Checkpoint(label or user_text)
         self.messages.append({"role": "user", "content": user_text})
@@ -195,6 +199,7 @@ class Agent:
                 problem = broken_call_error(content, set(self.tools))
                 if problem and repairs < MAX_REPAIRS:
                     repairs += 1
+                    stats.repairs += 1
                     self.ui.warn(f"The model's tool call couldn't be used: {problem}. Asking it to try again…")
                     self.messages.append({"role": "user", "content": (
                         f"Your tool call couldn't be used: {problem}. Send it again as one valid JSON object, "
@@ -204,6 +209,7 @@ class Agent:
                     continue
                 if self.config.auto_continue and not nudged and looks_unfinished(content):
                     nudged = 1
+                    stats.nudges += 1
                     self.ui.info("The model said it would do something but didn't; nudging it to continue…")
                     self.messages.append({"role": "user", "content": CONTINUE_NUDGE})
                     continue
