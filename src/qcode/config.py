@@ -18,25 +18,45 @@ DATA_DIR = Path(os.environ.get("QCODE_DATA_DIR", Path.home() / ".local" / "share
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 DEFAULT_TOML = """\
-# qcode configuration. Change values here or with /config set <key> <value>.
+# qcode configuration
+# Easiest way to change things: /settings inside qcode (or /config set <key> <value>).
+# Everything here is optional; a missing setting uses the default shown.
 
+# ── Server & model ─────────────────────────────────────────────────────────────
 # First API server, saved as "home" on first run. After that, manage servers inside qcode with
 # /servers, /server <name>, /add_api_server and /remove_api_server (stored in servers.json).
 base_url = "http://localhost:11434/v1"
-api_key = "ollama"          # Ollama ignores it, but the OpenAI client requires one
-model = "qcoder-14b"
+api_key = "ollama"            # Ollama ignores it, but the OpenAI client requires one
+model = "qcoder-14b"          # default model for new sessions
+temperature = "default"       # 0 = focused … 2 = creative, or "default" for the model's own
 
-max_steps = 25              # max model<->tool round trips per prompt
-tool_output_limit = 4000    # characters of tool output sent back to the model
-auto_update = "notify"      # notify | auto | off: checks GitHub for new releases once a day
+# ── Behaviour ──────────────────────────────────────────────────────────────────
+default_mode = "ask"          # ask | auto-edit | auto | plan   (Shift+Tab switches while running)
+                              #   ask:       approve every file edit and command
+                              #   auto-edit: file edits are automatic, commands still ask
+                              #   auto:      approve everything (careful)
+                              #   plan:      read-only; the model can look around and plan, not change anything
+auto_continue = true          # nudge the model once when it says "I'll do X" but doesn't do it
+read_before_write = true      # refuse to overwrite a file the model hasn't read this session
+max_steps = 25                # max model<->tool round trips per prompt
+tool_output_limit = 4000      # characters of tool output sent back to the model
+compact_at = 80               # summarize the history when the context is this % full
 
+# ── Updates ────────────────────────────────────────────────────────────────────
+auto_update = "notify"        # notify | auto | off: checks GitHub for new releases once a day
+
+# ── Approvals ──────────────────────────────────────────────────────────────────
 # Rules that never need approval. Match "<tool>" or "bash:<command>" (glob syntax).
 # Read-only tools (read_file, list_dir, glob, grep) are always allowed.
 # Bash commands containing ; & | ` $( < > or newlines are never auto-allowed.
 allow = ["bash:git status", "bash:git diff", "bash:git diff *", "bash:git log *", "bash:ls", "bash:ls *"]
 
-# Fallback context window per model. qcode reads num_ctx from Ollama automatically;
-# these are only used when the server doesn't report it.
+# ── Context size per model ─────────────────────────────────────────────────────
+# qcode asks Ollama for each model's real context automatically. Use /context set <tokens>
+# to change it (on Ollama this updates the model on the server). Entries here are used for
+# servers that don't report it, e.g. LM Studio or vLLM:
+#   [models."my-model"]
+#   num_ctx = 32768
 [models.qcoder-14b]
 num_ctx = 14336
 
@@ -46,14 +66,36 @@ num_ctx = 32768
 
 DEFAULT_NUM_CTX = 8192
 AUTO_UPDATE_MODES = ("notify", "auto", "off")
+PERMISSION_MODES = ("ask", "auto-edit", "auto", "plan")
+MODE_ALIASES = {"yolo": "auto", "autoedit": "auto-edit", "edit": "auto-edit", "default": "ask", "normal": "ask", "readonly": "plan", "read-only": "plan"}
 
-# Keys /config set may change: key -> (type or allowed values, description)
-SETTABLE: dict[str, tuple[object, str]] = {
-    "model": (str, "default model for new sessions"),
-    "max_steps": (int, "max model<->tool round trips per prompt"),
-    "tool_output_limit": (int, "characters of tool output sent to the model"),
-    "auto_update": (AUTO_UPDATE_MODES, "update check: notify, auto (install at startup) or off"),
-}
+
+@dataclass(frozen=True)
+class Setting:
+    key: str
+    kind: str  # "int" | "bool" | "choice" | "str" | "temperature"
+    label: str
+    help: str
+    choices: tuple = ()
+    lo: float | None = None
+    hi: float | None = None
+
+
+SETTINGS: list[Setting] = [
+    Setting("default_mode", "choice", "Permission mode at startup",
+            "ask: approve edits & commands · auto-edit: edits automatic, commands ask · auto: everything automatic · plan: read-only",
+            choices=PERMISSION_MODES),
+    Setting("model", "str", "Default model", "model used when qcode starts (use /model to switch right now)"),
+    Setting("temperature", "temperature", "Temperature", "0 = focused and repeatable … 2 = creative; 'default' uses the model's own", lo=0, hi=2),
+    Setting("auto_continue", "bool", "Auto-continue", "nudge the model once when it says it'll do something but doesn't call a tool"),
+    Setting("read_before_write", "bool", "Read before overwrite", "refuse to overwrite an existing file the model hasn't read this session"),
+    Setting("compact_at", "int", "Compact history at (%)", "summarize older messages when the context window is this full", lo=50, hi=95),
+    Setting("max_steps", "int", "Max steps per prompt", "how many tool round trips the model may take for one request", lo=1, hi=200),
+    Setting("tool_output_limit", "int", "Tool output limit", "characters of each tool result sent to the model", lo=500, hi=200000),
+    Setting("auto_update", "choice", "Updates", "notify: show when a release is out · auto: install it at startup · off: never check",
+            choices=AUTO_UPDATE_MODES),
+]
+SETTABLE: dict[str, Setting] = {s.key: s for s in SETTINGS}
 
 
 @dataclass
@@ -61,8 +103,13 @@ class Config:
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     model: str = "qcoder-14b"
+    temperature: object = "default"  # "default" or a float
+    default_mode: str = "ask"
+    auto_continue: bool = True
+    read_before_write: bool = True
     max_steps: int = 25
     tool_output_limit: int = 4000
+    compact_at: int = 80
     auto_update: str = "notify"
     allow: list[str] = field(default_factory=list)
     models: dict[str, dict] = field(default_factory=dict)
@@ -70,6 +117,13 @@ class Config:
     def num_ctx(self, model: str | None = None) -> int:
         name = (model or self.model).removesuffix(":latest")
         return int(self.models.get(name, {}).get("num_ctx", DEFAULT_NUM_CTX))
+
+    def has_model_ctx(self, model: str) -> bool:
+        return "num_ctx" in self.models.get(model.removesuffix(":latest"), {})
+
+    @property
+    def temperature_value(self) -> float | None:
+        return None if self.temperature in ("default", None, "") else float(self.temperature)
 
 
 def load_config(path: Path = CONFIG_FILE) -> Config:
@@ -81,44 +135,118 @@ def load_config(path: Path = CONFIG_FILE) -> Config:
     cfg = Config(**known)
     cfg.base_url = os.environ.get("QCODE_BASE_URL", cfg.base_url)
     cfg.model = os.environ.get("QCODE_MODEL", cfg.model)
-    if cfg.auto_update not in AUTO_UPDATE_MODES:
-        cfg.auto_update = "notify"
+    # Anything out of range falls back to its default rather than breaking qcode.
+    defaults = Config()
+    for s in SETTINGS:
+        try:
+            setattr(cfg, s.key, parse_setting(s.key, str(getattr(cfg, s.key)).lower() if s.kind == "bool" else str(getattr(cfg, s.key))))
+        except ValueError:
+            setattr(cfg, s.key, getattr(defaults, s.key))
     return cfg
 
 
+def parse_mode(raw: str) -> str:
+    mode = MODE_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+    if mode not in PERMISSION_MODES:
+        raise ValueError(f"mode must be one of: {', '.join(PERMISSION_MODES)}")
+    return mode
+
+
+def parse_tokens(raw: str) -> int:
+    """'32768', '32k', '32K', '1m' -> tokens."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kKmM]?)\s*", raw)
+    if not m:
+        raise ValueError("give a number of tokens, e.g. 16384 or 16k")
+    n = float(m.group(1)) * {"": 1, "k": 1024, "m": 1024 * 1024}[m.group(2).lower()]
+    return int(n)
+
+
 def parse_setting(key: str, raw: str):
-    """Validate and convert a /config set value. Raises ValueError with a readable message."""
+    """Validate and convert a setting value from text. Raises ValueError with a readable message."""
     if key not in SETTABLE:
         raise ValueError(f"unknown setting {key!r}; settable: {', '.join(SETTABLE)}")
-    kind, _ = SETTABLE[key]
+    s = SETTABLE[key]
     raw = raw.strip()
-    if kind is int:
-        if not raw.isdigit() or int(raw) < 1:
-            raise ValueError(f"{key} must be a positive whole number")
-        return int(raw)
-    if isinstance(kind, tuple):
-        if raw not in kind:
-            raise ValueError(f"{key} must be one of: {', '.join(kind)}")
-        return raw
+    if s.kind == "int":
+        if not raw.isdigit():
+            raise ValueError(f"{key} must be a whole number")
+        n = int(raw)
+        if (s.lo is not None and n < s.lo) or (s.hi is not None and n > s.hi):
+            raise ValueError(f"{key} must be between {int(s.lo)} and {int(s.hi)}")
+        return n
+    if s.kind == "bool":
+        v = raw.lower()
+        if v in ("true", "on", "yes", "1", "y"):
+            return True
+        if v in ("false", "off", "no", "0", "n"):
+            return False
+        raise ValueError(f"{key} must be on or off")
+    if s.kind == "choice":
+        if key == "default_mode":
+            return parse_mode(raw)
+        if raw.lower() not in s.choices:
+            raise ValueError(f"{key} must be one of: {', '.join(s.choices)}")
+        return raw.lower()
+    if s.kind == "temperature":
+        if raw.lower() in ("default", "none", "auto", ""):
+            return "default"
+        try:
+            t = float(raw)
+        except ValueError:
+            raise ValueError("temperature must be a number like 0.2, or 'default'") from None
+        if not s.lo <= t <= s.hi:
+            raise ValueError(f"temperature must be between {s.lo:g} and {s.hi:g}")
+        return t
     if not raw:
         raise ValueError(f"{key} can't be empty")
     return raw
 
 
+def _toml_literal(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return json.dumps(value)
+
+
 def set_config_value(key: str, value, path: Path = CONFIG_FILE) -> None:
     """Write a top-level `key = value` into config.toml, keeping comments and other settings."""
-    literal = str(value) if isinstance(value, int) else json.dumps(value)
-    line = f"{key} = {literal}"
+    line = f"{key} = {_toml_literal(value)}"
     text = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_TOML
     table = re.search(r"(?m)^\[", text)
     head, tail = (text[: table.start()], text[table.start() :]) if table else (text, "")
-    pattern = re.compile(rf"(?m)^{re.escape(key)}\s*=[^\n]*$")
+    pattern = re.compile(rf"(?m)^{re.escape(key)}[ \t]*=[^\n]*?(?=[ \t]*#|$)")
     if pattern.search(head):
-        head = pattern.sub(lambda _: line, head, count=1)
+        head = pattern.sub(lambda m: line.ljust(len(m.group(0))), head, count=1)  # keeps trailing comments aligned
     else:
-        head = head.rstrip("\n") + f"\n{line}\n\n"
+        # Put new keys before the comment block that introduces the first table.
+        intro = re.search(r"(?m)(?:^#[^\n]*\n)+\Z", head)
+        at = intro.start() if intro else len(head)
+        head = head[:at].rstrip("\n") + f"\n{line}\n\n" + head[at:]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(head + tail, encoding="utf-8")
+
+
+def set_model_context(model: str, tokens: int, path: Path = CONFIG_FILE) -> None:
+    """Write [models."<model>"] num_ctx = tokens into config.toml."""
+    name = model.removesuffix(":latest")
+    text = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_TOML
+    header = re.compile(rf'(?m)^\[models\.(?:"{re.escape(name)}"|{re.escape(name)})\][ \t]*$')
+    m = header.search(text)
+    if m:
+        nxt = re.search(r"(?m)^\[", text[m.end():])
+        end = m.end() + nxt.start() if nxt else len(text)
+        section = text[m.end():end]
+        if re.search(r"(?m)^num_ctx[ \t]*=", section):
+            section = re.sub(r"(?m)^num_ctx[ \t]*=[^\n]*", f"num_ctx = {tokens}", section, count=1)
+        else:
+            section = f"\nnum_ctx = {tokens}" + section
+        text = text[:m.end()] + section + text[end:]
+    else:
+        text = text.rstrip("\n") + f'\n\n[models."{name}"]\nnum_ctx = {tokens}\n'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def project_settings_file(root: Path) -> Path:

@@ -62,6 +62,43 @@ class LLMClient:
                 return ContextInfo(int(entry["context_length"]), maximum, "loaded")
         return ContextInfo(OLLAMA_DEFAULT_CTX, maximum, "ollama-default")
 
+    @property
+    def _ollama_root(self) -> str:
+        return self.base_url.rstrip("/").removesuffix("/v1")
+
+    def set_context(self, model: str, tokens: int) -> None:
+        """Bake num_ctx into an Ollama model on the server (same as a Modelfile with PARAMETER num_ctx).
+        Ollama keeps the model's other settings (template, stop tokens). Raises RuntimeError on failure."""
+        try:
+            r = httpx.post(
+                f"{self._ollama_root}/api/create",
+                json={"model": model, "from": model, "parameters": {"num_ctx": tokens}, "stream": False},
+                timeout=600,
+            )
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"couldn't reach the server: {e}") from None
+        if r.status_code != 200:
+            try:
+                detail = r.json().get("error") or r.text
+            except ValueError:
+                detail = r.text
+            raise RuntimeError(detail.strip() or f"HTTP {r.status_code}")
+
+    def gpu_fit(self, model: str) -> tuple[int, int] | None:
+        """Load the model and report (percent of it on the GPU, total size in MB), or None if unknown."""
+        root = self._ollama_root
+        try:
+            httpx.post(f"{root}/api/generate", json={"model": model, "prompt": ""}, timeout=600)
+            loaded = httpx.get(f"{root}/api/ps", timeout=10).json().get("models", [])
+        except (httpx.HTTPError, ValueError):
+            return None
+        names = {model, f"{model}:latest"}
+        for m in loaded:
+            if m.get("name") in names or m.get("model") in names:
+                size = max(int(m.get("size") or 0), 1)
+                return min(100, int(m.get("size_vram") or 0) * 100 // size), size // (1024 * 1024)
+        return None
+
     def complete(self, model: str, messages: list[dict]) -> str:
         resp = self._client.chat.completions.create(model=model, messages=messages)
         return resp.choices[0].message.content or ""
@@ -72,8 +109,11 @@ class LLMClient:
         messages: list[dict],
         tools: list[dict],
         on_text: Callable[[str], None],
+        temperature: float | None = None,
     ) -> tuple[str, list[ToolCall]]:
         kwargs = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if tools:
             kwargs["tools"] = tools
         content: list[str] = []

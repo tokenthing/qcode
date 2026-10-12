@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 CHARS_PER_TOKEN = 3.5
-COMPACT_THRESHOLD = 0.8
 
 
 def estimate_tokens(messages: list[dict]) -> int:

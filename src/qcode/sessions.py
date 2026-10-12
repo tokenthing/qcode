@@ -26,17 +26,27 @@ def new_session_path() -> Path:
     return SESSIONS_DIR / f"{stamp}.json"
 
 
-def save(path: Path, root: Path, model: str, messages: list[dict]) -> None:
+MAX_SAVED_CHECKPOINTS = 20
+MAX_CHECKPOINT_FILE_CHARS = 512_000
+
+
+def save(path: Path, root: Path, model: str, messages: list[dict], checkpoints: list[dict] | None = None) -> None:
     # Skip the system prompt; it's rebuilt on resume.
     body = [m for m in messages if m["role"] != "system"]
     if not body:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Undo history survives restarts; very large files aren't kept (their undo entry is dropped).
+    kept = [
+        c for c in (checkpoints or [])[-MAX_SAVED_CHECKPOINTS:]
+        if all(old is None or len(old) <= MAX_CHECKPOINT_FILE_CHARS for old in c["files"].values())
+    ]
     data = {
         "root": str(root),
         "model": model,
         "updated": datetime.datetime.now().isoformat(timespec="seconds"),
         "messages": body,
+        "checkpoints": kept,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 

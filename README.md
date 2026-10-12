@@ -46,10 +46,46 @@ qcode -r                           # resume the last session in this folder
 qcode -m qcoder-7b                 # pick a model
 qcode -s laptop                    # use a saved server
 qcode --base-url 192.168.1.50      # one-off server (IP, host:port or URL)
-qcode --yolo                       # skip approval prompts (careful)
+qcode --mode auto-edit             # start in a permission mode (ask, auto-edit, auto, plan)
 ```
 
-The bottom bar shows the model, the active server and its address (green dot means online), a context gauge, the project and git branch, YOLO mode, and available updates.
+The bottom bar shows the model, the active server and its address (green dot means online), a context gauge, the project and git branch, the permission mode, and available updates.
+
+### Permission modes
+
+Press **Shift+Tab** to cycle through them, or use `/mode <name>`. The startup default is in `/settings`.
+
+| mode | what happens |
+|---|---|
+| `⏵ ask` (default) | asks before every file edit and command |
+| `⏵⏵ auto-edit` | file edits happen automatically; commands still ask |
+| `⚡ auto` | everything happens automatically (same as `--yolo`) |
+| `⏸ plan` | read-only: the model looks around and proposes a plan, but changes nothing |
+
+### Settings
+
+`/settings` opens a menu (arrow keys, Enter to change, Esc to close) with these options:
+- permission mode
+- context size
+- default model
+- temperature
+- auto-continue (nudges the model when it says "I'll do X" and stops)
+- read-before-overwrite protection
+- when to compact the history
+- max steps
+- tool output limit
+- update behaviour
+
+Everything is saved to `~/.config/qcode/config.toml`, which is fully commented if you'd rather edit it by hand (`/config edit`).
+
+### Context size
+
+`/context` shows what's filling the context window. To resize it:
+```
+/context set 16k      # or 16384
+/context set max      # the most the model supports
+```
+On Ollama this updates the model on the server, so it applies to everyone using it. qcode then loads the model and warns you if it no longer fits on the GPU. For other servers it's saved in `config.toml`.
 
 ### Commands
 
@@ -58,7 +94,7 @@ The bottom bar shows the model, the active server and its address (green dot mea
 | **Conversation** | `/clear` `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
 | **Models & servers** | `/model [name]` `/servers` (live ping) `/server <name>` `/add_api_server <name> <ip\|host:port\|url> [key]` `/remove_api_server <name>` |
 | **Project** | `/diff` (uncommitted git changes) `/init` (write QCODE.md) `/memory` `/cwd` |
-| **Settings** | `/config` · `/config set <key> <value>` · `/config edit` · `/config path` · `/permissions [reset\|remove n]` · `/yolo` · `/tools` |
+| **Settings** | `/settings` (menu) · `/mode [ask\|auto-edit\|auto\|plan]` · `/context set <tokens>` · `/config` · `/config set <key> <value>` · `/config edit` · `/permissions [reset\|remove n]` · `/tools` |
 | **App** | `/status` `/doctor` (diagnostics) `/version` `/update` `/help` `/exit` |
 | **Shell** | `!git status` runs a command directly; its output is sent along with your next message |
 
@@ -80,7 +116,7 @@ num_ctx = 32768
 
 ### Config & memory
 
-- `~/.config/qcode/config.toml` holds the default model, `max_steps`, `tool_output_limit`, `auto_update`, allow rules and fallback context sizes. Change it with `/config set` or `/config edit`.
+- `~/.config/qcode/config.toml` holds every setting from `/settings`, the allow rules and per-model context sizes for non-Ollama servers. Each line is commented.
 - Per-project approvals are saved in `.qcode/settings.json`.
 - `QCODE.md` in the project root (and `~/.config/qcode/QCODE.md`) is added to the system prompt. Use `/init` to generate one.
 
@@ -107,7 +143,8 @@ Re-run it after `ollama pull`, because pulling resets a model's settings. On an 
 
 - `agent.py` runs the loop: stream the reply, run its tool calls, feed the results back, and repeat until the model answers without tools (at most `max_steps`). File edits are checkpointed per turn for `/undo`.
 - Tools: `read_file` (paged), `write_file`, `edit_file` (exact unique match), `list_dir`, `glob`, `grep`, `bash`. File tools can't leave the project root.
-- Read-only tools run freely. Writes and `bash` ask first (once, always for the session, or always for the project). Allow rules never auto-approve chained shell commands (`;`, `&&`, `|`, `$(`…).
+- Read-only tools run freely. Writes and `bash` follow the permission mode, and in `ask` mode you approve once, for the session, or for the project. Allow rules never auto-approve chained shell commands (`;`, `&&`, `|`, `$(`…).
+- Safety net: the model can't overwrite a file it hasn't read this session. An overwrite that would delete most of a file gets a red warning. `/undo` history is saved with the session, so it survives restarts.
 - Qwen2.5-Coder often writes tool calls as plain JSON. `toolparse.py` recovers them (bare JSON, fenced JSON or `<tool_call>` tags).
 - Tool output is capped. At 80% of the context window, the history is summarized automatically.
 

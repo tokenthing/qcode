@@ -143,6 +143,27 @@ def _assistant(md: str) -> Table:
     return grid
 
 
+def _lexer_for(path: str) -> str:
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return {"py": "python", "js": "javascript", "ts": "typescript", "html": "html", "htm": "html", "css": "css",
+            "json": "json", "md": "markdown", "sh": "bash", "toml": "toml", "yml": "yaml", "yaml": "yaml",
+            "java": "java", "rs": "rust", "go": "go", "c": "c", "cpp": "cpp", "kt": "kotlin"}.get(ext, "text")
+
+
+MODE_LABELS = {
+    "ask": ("⏵ ask", MUTED),
+    "auto-edit": ("⏵⏵ auto-edit", WARN),
+    "auto": ("⚡ auto", ERR),
+    "plan": ("⏸ plan", ACCENT2),
+}
+MODE_HELP = {
+    "ask": "asks before every file edit and command",
+    "auto-edit": "file edits happen automatically; commands still ask",
+    "auto": "everything happens automatically, no questions",
+    "plan": "read-only: qcode looks around and proposes a plan, changes nothing",
+}
+
+
 class _Status:
     """Animated 'Thinking… (4s · ↓ 120 tokens)' line, re-rendered by Live."""
 
@@ -230,6 +251,90 @@ def select(question: str, options: list[tuple[str, str]], cancel: str) -> str:
     return choice
 
 
+def text_input(label: str, default: str = "") -> str | None:
+    """One-line input with a pre-filled default. None if cancelled."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        try:
+            raw = console.input(f"  {label} [{default}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return raw or default
+    from prompt_toolkit import prompt as pt_prompt
+    from prompt_toolkit.styles import Style
+
+    try:
+        return pt_prompt([("class:label", f"  {label}: ")], default=default,
+                         style=Style.from_dict({"label": f"bold {ACCENT}"})).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def settings_menu(rows: list[tuple[str, str, str, str]], start: int = 0) -> str | None:
+    """Arrow-key list of (key, label, value, help). Returns the chosen key, or None for Esc / Done."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        for i, (_, label, value, _h) in enumerate(rows, 1):
+            console.print(f"  {i}. {label}: {value}")
+        try:
+            raw = console.input("  number to change (Enter to finish): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return rows[int(raw) - 1][0] if raw.isdigit() and 1 <= int(raw) <= len(rows) else None
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    state = {"i": max(0, min(start, len(rows) - 1))}
+    width = max(len(r[1]) for r in rows) + 2
+    kb = KeyBindings()
+
+    @kb.add("up")
+    @kb.add("k")
+    def _up(event):
+        state["i"] = (state["i"] - 1) % len(rows)
+
+    @kb.add("down")
+    @kb.add("j")
+    @kb.add("tab")
+    def _down(event):
+        state["i"] = (state["i"] + 1) % len(rows)
+
+    @kb.add("enter")
+    @kb.add("space")
+    def _pick(event):
+        event.app.exit(result=rows[state["i"]][0])
+
+    @kb.add("escape", eager=True)
+    @kb.add("c-c")
+    @kb.add("q")
+    def _quit(event):
+        event.app.exit(result=None)
+
+    def render():
+        out = [("class:title", "  Settings  "), ("class:hint", "↑/↓ move · enter change · esc done\n\n")]
+        for i, (key, label, value, _h) in enumerate(rows):
+            current = i == state["i"]
+            out.append(("class:sel" if current else "class:opt", f"  {'❯' if current else ' '} {label.ljust(width)}"))
+            out.append(("class:valsel" if current else "class:val", f"{value}\n"))
+        out.append(("class:help", f"\n  {rows[state['i']][3]}"))
+        return out
+
+    app = Application(
+        layout=Layout(Window(FormattedTextControl(render), always_hide_cursor=True)),
+        key_bindings=kb,
+        style=Style.from_dict({
+            "title": f"bold {ACCENT}", "hint": MUTED, "sel": f"bold {ACCENT}", "opt": "#cdd6f4",
+            "val": ACCENT2, "valsel": f"bold {ACCENT2}", "help": MUTED,
+        }),
+        full_screen=False,
+        erase_when_done=True,
+    )
+    return app.run()
+
+
 # --- the UI the agent talks to -------------------------------------------------------
 @dataclass
 class BannerInfo:
@@ -244,6 +349,7 @@ class BannerInfo:
     branch: str | None
     version: str
     notice: str | None = None
+    mode: str = "ask"
 
 
 class TerminalUI:
@@ -331,11 +437,23 @@ class TerminalUI:
             body: RenderableType = Syntax(args.get("command", ""), "bash", theme=CODE_THEME, word_wrap=True, background_color="default")
         elif preview is not None:
             adds, dels = diff_stats(preview)
-            body = Group(
-                Text.assemble((args.get("path", ""), "bold"), ("  +" + str(adds), OK), (" −" + str(dels), ERR)),
-                Text(""),
-                render_diff(preview, max_lines=80, indent=4),
-            )
+            head = Text.assemble((args.get("path", ""), "bold"), ("  +" + str(adds), OK), (" −" + str(dels), ERR))
+            if name == "write_file" and dels >= 10 and dels > 2 * adds:
+                new = args.get("content", "")
+                new_lines = new.splitlines()
+                shown = "\n".join(new_lines[:40]) + (f"\n… {len(new_lines) - 40} more lines" if len(new_lines) > 40 else "")
+                body = Group(
+                    head,
+                    Text(""),
+                    Text(f" ⚠  This REPLACES {dels} existing lines with {len(new_lines)}. Most of this file will be deleted. ",
+                         style=f"bold #ffffff on {DEL_BG}"),
+                    Text(""),
+                    Text("New content:", style="bold"),
+                    Syntax(shown or "(empty)", _lexer_for(args.get("path", "")), theme=CODE_THEME, background_color="default", word_wrap=True),
+                    Text("Tip: choose No, then ask for an edit instead of a rewrite. /undo can also revert it later.", style=MUTED),
+                )
+            else:
+                body = Group(head, Text(""), render_diff(preview, max_lines=80, indent=4))
         else:
             body = Text(json.dumps(args, indent=2))
         console.print(Panel(body, title=f"[bold {WARN}]{title}[/]", title_align="left", border_style=WARN, box=box.ROUNDED, padding=(0, 1)))
@@ -401,6 +519,8 @@ def banner(info: BannerInfo) -> None:
     grid.add_row("model", Text.assemble((info.model, f"bold {ACCENT}"), (f"  {info.num_ctx:,} ctx", MUTED)))
     grid.add_row("server", Text.assemble((info.server_name, "bold"), ("  ", ""), (info.server_address, ACCENT2), ("  ", ""), status))
     grid.add_row("project", Text.assemble((info.project, ""), (f"  ⎇ {info.branch}" if info.branch else "", MUTED)))
+    mode_text, mode_color = MODE_LABELS.get(info.mode, MODE_LABELS["ask"])
+    grid.add_row("mode", Text.assemble((mode_text, f"bold {mode_color}"), (f"  {MODE_HELP.get(info.mode, '')} · shift+tab to change", MUTED)))
 
     console.print(Panel(Group(head, Text(""), grid), box=box.ROUNDED, border_style=ACCENT, padding=(1, 2), expand=False))
     console.print(Text("  /help commands · !cmd runs a shell command · esc+enter newline · ctrl+c interrupt · ctrl+d quit", style=MUTED))
@@ -548,3 +668,7 @@ class NullUI:
     def ok(self, msg): pass
     def warn(self, msg): pass
     def error(self, msg): pass
+
+    def spinner(self, msg):
+        import contextlib
+        return contextlib.nullcontext()

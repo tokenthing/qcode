@@ -10,7 +10,7 @@ import typer
 from . import sessions
 from .agent import Agent
 from .client import LLMClient
-from .config import load_config
+from .config import load_config, parse_mode
 from .permissions import Permissions
 from .repl import Repl
 from .servers import Server, ServerStore, normalize_url
@@ -26,7 +26,8 @@ def main(
     server_name: Optional[str] = typer.Option(None, "-s", "--server", help="Saved server to use (see /servers)."),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="One-off server address, e.g. 192.168.1.50 or http://host:11434/v1"),
     resume: bool = typer.Option(False, "-r", "--resume", help="Resume the latest session for this folder."),
-    yolo: bool = typer.Option(False, "--yolo", help="Approve every tool call without asking."),
+    mode: Optional[str] = typer.Option(None, "--mode", help="Permission mode: ask, auto-edit, auto or plan (default from config)."),
+    yolo: bool = typer.Option(False, "--yolo", help="Same as --mode auto: approve every tool call without asking."),
     cwd: Path = typer.Option(Path.cwd(), "--cwd", help="Project root (default: current directory)."),
 ) -> None:
     config = load_config()
@@ -45,7 +46,11 @@ def main(
 
     root = cwd.resolve()
     ui = TerminalUI()
-    permissions = Permissions(root, config.allow, ui.ask_permission, yolo=yolo)
+    try:
+        start_mode = "auto" if yolo else parse_mode(mode) if mode else config.default_mode
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--mode") from None
+    permissions = Permissions(root, config.allow, ui.ask_permission, mode=start_mode)
     agent = Agent(LLMClient(server.base_url, server.api_key), config, root, permissions, ui)
 
     if resume:
@@ -58,7 +63,7 @@ def main(
         else:
             ui.info("No previous session for this folder; starting fresh.")
 
-    repl = Repl(agent, store, server, yolo=yolo)
+    repl = Repl(agent, store, server, mode=start_mode)
     if prompt:
         repl.ask(prompt)
         return

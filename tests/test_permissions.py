@@ -36,6 +36,15 @@ def test_always_project_persists(root):
     assert p2.check("bash", {"command": "pytest -q"}, None) and asked == []
 
 
-def test_yolo(root):
-    p = Permissions(root, [], lambda *a: "n", yolo=True)
-    assert p.check("bash", {"command": "rm -rf build"}, None)
+def test_modes(root):
+    asked = []
+    p = Permissions(root, [], lambda *a: asked.append(a[0]) or "n", mode="auto")
+    assert p.check("bash", {"command": "rm -rf build"}, None) and p.yolo
+    p.mode = "auto-edit"
+    assert p.check("write_file", {"path": "x"}, "diff") and p.check("edit_file", {"path": "x"}, "diff")
+    assert not p.check("bash", {"command": "make"}, None) and asked == ["bash"]
+    p.mode = "plan"
+    assert p.blocked("write_file") and p.blocked("bash")
+    p.mode = "ask"
+    assert p.blocked("bash") is None
+    assert [p.cycle_mode() for _ in range(4)] == ["auto-edit", "auto", "plan", "ask"]

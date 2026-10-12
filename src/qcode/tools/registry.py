@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +16,11 @@ class ToolError(Exception):
 @dataclass
 class ToolContext:
     root: Path
+    guard_overwrite: bool = True  # refuse write_file over an existing file that wasn't read or written this session
+    seen: set[str] = field(default_factory=set)  # absolute paths read or written this session
+
+    def mark_seen(self, p: Path) -> None:
+        self.seen.add(str(p))
 
     def resolve(self, path: str) -> Path:
         p = Path(path).expanduser()

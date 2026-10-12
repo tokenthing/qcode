@@ -6,3 +6,4 @@ tests/.tmp_home/
 .qcode/
 dist/
 installer/defaults.json
+.DS_Store

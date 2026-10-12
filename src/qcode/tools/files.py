@@ -22,6 +22,7 @@ def _read_text(ctx: ToolContext, path: str) -> str:
 
 def read_file(ctx: ToolContext, args: dict) -> str:
     text = _read_text(ctx, args["path"])
+    ctx.mark_seen(ctx.resolve(args["path"]))
     lines = text.splitlines()
     offset = max(1, int(args.get("offset") or 1))
     limit = max(1, int(args.get("limit") or DEFAULT_READ_LIMIT))
@@ -35,17 +36,28 @@ def read_file(ctx: ToolContext, args: dict) -> str:
     return body
 
 
-def _write_preview(ctx: ToolContext, args: dict) -> str:
+def _check_overwrite(ctx: ToolContext, args: dict):
     p = ctx.resolve(args["path"])
+    if ctx.guard_overwrite and p.is_file() and str(p) not in ctx.seen and p.stat().st_size > 0:
+        raise ToolError(
+            f"{args['path']} already exists and you haven't read it in this conversation, so overwriting it could "
+            "destroy work. Call read_file on it first. To change only part of it, use edit_file instead."
+        )
+    return p
+
+
+def _write_preview(ctx: ToolContext, args: dict) -> str:
+    p = _check_overwrite(ctx, args)
     old = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
     return unified_diff(old, args["content"], ctx.rel(p))
 
 
 def write_file(ctx: ToolContext, args: dict) -> str:
-    p = ctx.resolve(args["path"])
+    p = _check_overwrite(ctx, args)
     existed = p.exists()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(args["content"], encoding="utf-8")
+    ctx.mark_seen(p)
     n = len(args["content"].splitlines())
     return f"{'Overwrote' if existed else 'Created'} {ctx.rel(p)} ({n} lines)"
 
@@ -74,6 +86,7 @@ def edit_file(ctx: ToolContext, args: dict) -> str:
     _, new = _apply_edit(ctx, args)
     p = ctx.resolve(args["path"])
     p.write_text(new, encoding="utf-8")
+    ctx.mark_seen(p)
     return f"Edited {ctx.rel(p)}"
 
 

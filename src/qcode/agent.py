@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,16 +13,34 @@ from typing import Optional
 from . import sessions
 from .client import ToolCall
 from .config import Config
-from .context import COMPACT_THRESHOLD, estimate_tokens, transcript, truncate
+from .context import estimate_tokens, transcript, truncate
 from .memory import load_memory
 from .permissions import Permissions
-from .prompts import COMPACT_PROMPT, build_system_prompt
+from .prompts import COMPACT_PROMPT, CONTINUE_NUDGE, build_system_prompt
 from .toolparse import broken_call_error, extract_text_tool_calls
 from .tools import ALL_TOOLS, ToolContext, ToolError, normalize_args
 
 DENIED = "The user denied this tool call. Stop and wait for their instructions."
 MAX_REPAIRS = 2  # times per turn we ask the model to rewrite a tool call we couldn't read
 FILE_TOOLS = ("write_file", "edit_file")
+
+# "I'll write this to the file.", "Here's the command:" … announced but not done.
+_INTENT_RE = re.compile(
+    r"\b(?:i'll|i will|i'm going to|let me|now i'll|next,? i'll|i'll now)\b.*\b(?:write|save|create|update|apply|add|"
+    r"edit|change|run|read|make|fix|implement|modify|replace|polish|style)\b",
+    re.I,
+)
+
+
+def looks_unfinished(text: str) -> bool:
+    """True when a reply ends by announcing an action (and didn't ask the user anything)."""
+    lines = [l.strip() for l in (text or "").strip().splitlines() if l.strip() and not l.strip().startswith("```")]
+    if not lines:
+        return False
+    last = lines[-1]
+    if "?" in last:
+        return False
+    return last.endswith(":") or bool(_INTENT_RE.search(last))
 
 
 @dataclass
@@ -49,7 +68,7 @@ class Agent:
         self.config = config
         self.model = config.model
         self.root = root
-        self.ctx = ToolContext(root)
+        self.ctx = ToolContext(root, guard_overwrite=config.read_before_write)
         self.permissions = permissions
         self.ui = ui
         self.tools = ALL_TOOLS
@@ -61,7 +80,8 @@ class Agent:
 
     # --- setup / state ------------------------------------------------------------
     def _system_message(self) -> dict:
-        return {"role": "system", "content": build_system_prompt(self.root, load_memory(self.root))}
+        mode = getattr(self.permissions, "mode", "ask")
+        return {"role": "system", "content": build_system_prompt(self.root, load_memory(self.root), mode)}
 
     def refresh_system(self) -> None:
         self.messages[0] = self._system_message()
@@ -69,16 +89,24 @@ class Agent:
     def reset(self) -> None:
         self.messages = [self._system_message()]
         self.session_path = sessions.new_session_path()
+        self.checkpoints = []
+        self.ctx.seen.clear()
 
     def load_session(self, path: Path) -> None:
         data = sessions.load(path)
         self.messages = [self._system_message(), *data["messages"]]
         self.session_path = path
+        self.checkpoints = [Checkpoint(c["prompt"], dict(c["files"])) for c in data.get("checkpoints", [])]
         if data.get("model"):
             self.model = data["model"]
 
     def save(self) -> None:
-        sessions.save(self.session_path, self.root, self.model, self.messages)
+        sessions.save(self.session_path, self.root, self.model, self.messages,
+                      [{"prompt": c.prompt, "files": c.files} for c in self.checkpoints])
+
+    def forget_context_sizes(self) -> None:
+        """Drop cached context sizes (after /context set or a server change)."""
+        self._ctx_cache.clear()
 
     def context_for(self, model: str) -> int:
         """Context window, best source first: the model's num_ctx, what Ollama is running it with,
@@ -138,13 +166,14 @@ class Agent:
 
     def _loop(self, stats: TurnStats) -> None:
         schemas = [t.schema() for t in self.tools.values()]
-        repairs = 0
+        repairs = nudged = 0
+        extra = {} if self.config.temperature_value is None else {"temperature": self.config.temperature_value}
         for _ in range(self.config.max_steps):
             self.maybe_compact()
             self.ui.stream_start()
             gen_start = time.monotonic()
             try:
-                content, calls = self.client.stream_chat(self.model, self.messages, schemas, self.ui.stream_text)
+                content, calls = self.client.stream_chat(self.model, self.messages, schemas, self.ui.stream_text, **extra)
             finally:
                 self.ui.stream_end()
             stats.gen_seconds += time.monotonic() - gen_start
@@ -173,6 +202,11 @@ class Agent:
                         "with quotes and newlines inside strings escaped (\\n, \\\")."
                     )})
                     continue
+                if self.config.auto_continue and not nudged and looks_unfinished(content):
+                    nudged = 1
+                    self.ui.info("The model said it would do something but didn't; nudging it to continue…")
+                    self.messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                    continue
                 return
 
             for i, call in enumerate(calls):
@@ -200,6 +234,10 @@ class Agent:
         args = normalize_args(tool, args)
 
         self.ui.tool_call(call.name, args)
+        blocked = None if tool.read_only else self.permissions.blocked(call.name)
+        if blocked:
+            self.ui.tool_result(call.name, args, "Not run: plan mode is on (Shift+Tab to change mode)", True)
+            return blocked, False
         preview, asked = None, False
         try:
             preview = tool.preview(self.ctx, args) if tool.preview else None
@@ -303,7 +341,7 @@ class Agent:
 
     # --- context management -------------------------------------------------------
     def maybe_compact(self) -> None:
-        if self.tokens_used() >= COMPACT_THRESHOLD * self.num_ctx:
+        if self.tokens_used() >= self.config.compact_at / 100 * self.num_ctx:
             self.ui.info("Context nearly full; compacting history…")
             self.compact(keep_current_turn=True)
 
@@ -322,7 +360,7 @@ class Agent:
                 *tail,
             ]
         # Still too big (one very long turn): elide older tool outputs, keeping the latest two.
-        if self.tokens_used() >= COMPACT_THRESHOLD * self.num_ctx:
+        if self.tokens_used() >= self.config.compact_at / 100 * self.num_ctx:
             tool_idx = [i for i, m in enumerate(self.messages) if m["role"] == "tool"]
             for i in tool_idx[:-2]:
                 self.messages[i]["content"] = "[old tool output removed to save context]"
