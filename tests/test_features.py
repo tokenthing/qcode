@@ -14,10 +14,10 @@ from test_agent import call, make_agent
 # --- config -------------------------------------------------------------------------
 def test_set_config_value_replaces_and_inserts(tmp_path):
     path = tmp_path / "config.toml"
-    path.write_text(config.DEFAULT_TOML)
+    path.write_text(config.DEFAULT_TOML, encoding="utf-8")
     config.set_config_value("max_steps", 40, path)
     config.set_config_value("model", "qcoder-7b", path)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert re.search(r"(?m)^max_steps = 40 +#", text) and re.search(r'(?m)^model = "qcoder-7b" +#', text)
     assert "[models.qcoder-14b]" in text and "# qcode configuration" in text  # rest untouched
     cfg = config.load_config(path)
@@ -192,13 +192,13 @@ def test_old_config_files_get_defaults_and_bad_values_are_ignored(tmp_path):
 
 def test_set_model_context_adds_and_updates_tables(tmp_path):
     path = tmp_path / "config.toml"
-    path.write_text(config.DEFAULT_TOML)
+    path.write_text(config.DEFAULT_TOML, encoding="utf-8")
     config.set_model_context("qwen2.5:1.5b", 32768, path)
     config.set_model_context("qcoder-14b:latest", 12288, path)
     config.set_model_context("qwen2.5:1.5b", 16384, path)
     models = config.load_config(path).models
     assert models["qwen2.5:1.5b"] == {"num_ctx": 16384} and models["qcoder-14b"] == {"num_ctx": 12288}
-    assert path.read_text().count('[models."qwen2.5:1.5b"]') == 1
+    assert path.read_text(encoding="utf-8").count('[models."qwen2.5:1.5b"]') == 1
 
 
 @pytest.mark.parametrize("raw,tokens", [("16384", 16384), ("16k", 16384), ("32K", 32768), ("1.5k", 1536), ("1m", 1048576)])
