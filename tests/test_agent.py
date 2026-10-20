@@ -158,3 +158,11 @@ def test_repairs_are_capped(root):
     agent, client, ui = make_agent(root, [bad, bad, bad, ("never reached", [])])
     agent.run("go")
     assert len(client.responses) == 1  # original + 2 repairs, then it stops
+
+
+def test_repeating_a_failed_call_gets_a_stronger_hint(root):
+    bad = ("", [call("read_file", path="missing.txt")])
+    agent, *_ = make_agent(root, [bad, bad, ("ok", [])])
+    agent.run("read it")
+    results = [m["content"] for m in agent.messages if m["role"] == "tool"]
+    assert "already made exactly this call" not in results[0] and "already made exactly this call" in results[1]

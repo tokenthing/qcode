@@ -28,6 +28,8 @@ DEFAULT_TOML = """\
 api_key = "ollama"            # Ollama ignores it, but the OpenAI client requires one
 model = "qcoder-14b"          # default model for new sessions
 temperature = "default"       # 0 = focused … 2 = creative, or "default" for the model's own
+thinking = "default"          # default | off: turn off the hidden reasoning of thinking models like qwen3 (much faster)
+tool_examples = false         # add a worked example of correct tool use to the instructions (helps small models)
 
 # ── Behaviour ──────────────────────────────────────────────────────────────────
 default_mode = "ask"          # ask | auto-edit | auto | plan   (Shift+Tab switches while running)
@@ -93,6 +95,9 @@ SETTINGS: list[Setting] = [
             choices=PERMISSION_MODES),
     Setting("model", "str", "Default model", "model used when qcode starts (use /model to switch right now)"),
     Setting("temperature", "temperature", "Temperature", "0 = focused and repeatable … 2 = creative; 'default' uses the model's own", lo=0, hi=2),
+    Setting("thinking", "choice", "Thinking", "off: skip the hidden reasoning of models like qwen3 (much faster); default: the model decides",
+            choices=("default", "off")),
+    Setting("tool_examples", "bool", "Tool-use example", "show the model a worked example of correct tool calls (helps small models)"),
     Setting("auto_continue", "bool", "Auto-continue", "nudge the model once when it says it'll do something but doesn't call a tool"),
     Setting("read_before_write", "bool", "Read before overwrite", "refuse to overwrite an existing file the model hasn't read this session"),
     Setting("compact_at", "int", "Compact history at (%)", "summarize older messages when the context window is this full", lo=50, hi=95),
@@ -113,6 +118,8 @@ class Config:
     api_key: str = "ollama"
     model: str = "qcoder-14b"
     temperature: object = "default"  # "default" or a float
+    thinking: str = "default"        # default | off
+    tool_examples: bool = False
     default_mode: str = "ask"
     auto_continue: bool = True
     read_before_write: bool = True
@@ -131,6 +138,10 @@ class Config:
 
     def has_model_ctx(self, model: str) -> bool:
         return "num_ctx" in self.models.get(model.removesuffix(":latest"), {})
+
+    @property
+    def reasoning_effort(self) -> str | None:
+        return "none" if self.thinking == "off" else None
 
     @property
     def temperature_value(self) -> float | None:

@@ -155,7 +155,8 @@ class Agent:
     # --- setup / state ------------------------------------------------------------
     def _system_message(self) -> dict:
         mode = getattr(self.permissions, "mode", "ask")
-        return {"role": "system", "content": build_system_prompt(self.root, load_memory(self.root), mode)}
+        examples = bool(getattr(self.config, "tool_examples", False))
+        return {"role": "system", "content": build_system_prompt(self.root, load_memory(self.root), mode, examples)}
 
     def refresh_system(self) -> None:
         self.messages[0] = self._system_message()
@@ -263,7 +264,10 @@ class Agent:
     def _loop(self, stats: TurnStats) -> None:
         schemas = [t.schema() for t in self.turn_tools.values()]
         repairs = nudges = 0
+        self._failed_calls: set[tuple[str, str]] = set()
         extra = {} if self.config.temperature_value is None else {"temperature": self.config.temperature_value}
+        if getattr(self.config, "reasoning_effort", None):
+            extra["reasoning_effort"] = self.config.reasoning_effort
         for _ in range(self.config.max_steps):
             self.maybe_compact()
             self.ui.stream_start()
@@ -360,6 +364,13 @@ class Agent:
             result, is_error = f"Error: missing required argument {e}", True
         except Exception as e:  # tool bugs shouldn't kill the session
             result, is_error = f"Error: {type(e).__name__}: {e}", True
+        if is_error:
+            signature = (call.name, json.dumps(args, sort_keys=True))
+            if signature in self._failed_calls:
+                result += ("\nYou already made exactly this call and it failed the same way. Don't repeat it: change "
+                           "the arguments (e.g. copy the text from read_file exactly) or use a different approach, such "
+                           "as write_file with the whole corrected file.")
+            self._failed_calls.add(signature)
         # The diff was already on screen if the user was asked; otherwise show it with the result.
         self.ui.tool_result(call.name, args, result, is_error, None if asked or is_error else preview)
         return truncate(result, self.config.tool_output_limit), False

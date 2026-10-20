@@ -99,8 +99,9 @@ class LLMClient:
                 return min(100, int(m.get("size_vram") or 0) * 100 // size), size // (1024 * 1024)
         return None
 
-    def complete(self, model: str, messages: list[dict]) -> str:
-        resp = self._client.chat.completions.create(model=model, messages=messages)
+    def complete(self, model: str, messages: list[dict], reasoning_effort: str | None = None) -> str:
+        extra = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+        resp = self._client.chat.completions.create(model=model, messages=messages, **extra)
         return resp.choices[0].message.content or ""
 
     def stream_chat(
@@ -110,10 +111,13 @@ class LLMClient:
         tools: list[dict],
         on_text: Callable[[str], None],
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> tuple[str, list[ToolCall]]:
         kwargs = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if reasoning_effort is not None:  # "none" turns off thinking models' hidden reasoning (much faster)
+            kwargs["reasoning_effort"] = reasoning_effort
         if tools:
             kwargs["tools"] = tools
         content: list[str] = []

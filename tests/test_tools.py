@@ -105,3 +105,27 @@ def test_write_file_tool_gets_cleaned_content():
     from qcode.tools import normalize_args
     args = normalize_args(ALL_TOOLS["write_file"], {"path": "x.py", "content": "```python\nx = 1\n```"})
     assert args["content"] == "x = 1"
+
+
+def test_broken_json_is_reported_right_away(root):
+    out = run(root, "write_file", path="settings.json", content='{"debug": true "version": "2.0"}')
+    assert "no longer valid JSON" in out
+    assert "WARNING" not in run(root, "write_file", path="ok.json", content='{"debug": true}')
+    out = run(root, "edit_file", path="ok.json", old_string="true}", new_string="true,}")
+    assert "no longer valid JSON" in out
+
+
+def test_edit_forgives_wrong_indentation(root):
+    (root / "settings.json").write_text('{\n  "name": "demo",\n  "debug": false,\n  "retries": 3\n}\n')
+    # exactly what qwen3:14b kept sending: 4 spaces where the file has 2
+    run(root, "edit_file", path="settings.json", old_string='    "debug": false,\n',
+        new_string='    "debug": true,\n    "version": "2.0",\n')
+    assert (root / "settings.json").read_text() == '{\n  "name": "demo",\n  "debug": true,\n  "version": "2.0",\n  "retries": 3\n}\n'
+
+
+def test_indent_fallback_needs_a_unique_match_and_hints_otherwise(root):
+    (root / "a.py").write_text("if x:\n    y = 1\nif z:\n    y = 1\n")
+    with pytest.raises(ToolError, match="not found"):
+        run(root, "edit_file", path="a.py", old_string="\ty = 1", new_string="\ty = 2")   # two places: refuse to guess
+    with pytest.raises(ToolError, match="Closest line is 2"):
+        run(root, "edit_file", path="a.py", old_string="y = 11", new_string="y = 2")

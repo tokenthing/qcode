@@ -292,3 +292,24 @@ def test_temperature_is_passed_only_when_set(root):
     agent.config.temperature = 0.3
     agent.run("hi")
     assert seen == {"temperature": 0.3}
+
+
+def test_thinking_off_and_examples_reach_the_model(root):
+    seen = {}
+
+    class Client:
+        def stream_chat(self, model, messages, tools, on_text, **kw):
+            seen.update(kw, system=messages[0]["content"])
+            return "ok", []
+
+    agent, *_ = make_agent(root, [])
+    agent.client = Client()
+    agent.run("hi")
+    assert "reasoning_effort" not in seen and "Example of working well" not in seen["system"]
+    agent.config.thinking, agent.config.tool_examples = "off", True
+    agent.refresh_system()
+    agent.run("hi")
+    assert seen["reasoning_effort"] == "none" and "Example of working well" in seen["system"]
+    assert config.parse_setting("thinking", "off") == "off"
+    with pytest.raises(ValueError):
+        config.parse_setting("thinking", "maybe")

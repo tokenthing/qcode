@@ -8,6 +8,18 @@ from .registry import Tool, ToolContext, ToolError, params
 DEFAULT_READ_LIMIT = 250
 
 
+def _validate(p, text: str) -> str:
+    """A note for the model when it just broke a structured file, so it fixes it before finishing."""
+    if p.suffix.lower() == ".json":
+        import json
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as e:
+            return (f"\nWARNING: {p.name} is no longer valid JSON ({e.msg} at line {e.lineno}, column {e.colno}). "
+                    "Read it and fix it now.")
+    return ""
+
+
 def _read_text(ctx: ToolContext, path: str) -> str:
     p = ctx.resolve(path)
     if not p.exists():
@@ -59,7 +71,49 @@ def write_file(ctx: ToolContext, args: dict) -> str:
     p.write_text(args["content"], encoding="utf-8")
     ctx.mark_seen(p)
     n = len(args["content"].splitlines())
-    return f"{'Overwrote' if existed else 'Created'} {ctx.rel(p)} ({n} lines)"
+    return f"{'Overwrote' if existed else 'Created'} {ctx.rel(p)} ({n} lines)" + _validate(p, args["content"])
+
+
+def _indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _match_ignoring_indent(text: str, old_s: str, new_s: str) -> str | None:
+    """Small models often get indentation wrong (4 spaces where the file has 2). If old_string matches exactly one
+    place once leading whitespace is ignored, apply the edit there, shifting new_string to the file's indentation."""
+    old_lines = old_s.strip("\n").split("\n")
+    if not any(l.strip() for l in old_lines):
+        return None
+    lines = text.split("\n")
+    want = [l.strip() for l in old_lines]
+    hits = [i for i in range(len(lines) - len(want) + 1) if [l.strip() for l in lines[i:i + len(want)]] == want]
+    if len(hits) != 1:
+        return None
+    i = hits[0]
+    first = next(k for k, l in enumerate(old_lines) if l.strip())
+    have, given = _indent(lines[i + first]), _indent(old_lines[first])
+    shifted = []
+    for line in new_s.strip("\n").split("\n"):
+        if line.startswith(given):
+            shifted.append(have + line[len(given):])
+        elif line.strip():
+            shifted.append(have + line.lstrip(" \t"))
+        else:
+            shifted.append(line)
+    return "\n".join(lines[:i] + shifted + lines[i + len(want):])
+
+
+def _closest_line_hint(text: str, old_s: str) -> str:
+    target = next((l.strip() for l in old_s.split("\n") if l.strip()), "")
+    if not target:
+        return ""
+    import difflib
+    lines = text.split("\n")
+    best = difflib.get_close_matches(target, [l.strip() for l in lines], n=1, cutoff=0.6)
+    if not best:
+        return ""
+    n = next(k for k, l in enumerate(lines) if l.strip() == best[0])
+    return f" Closest line is {n + 1}: {lines[n]!r}"
 
 
 def _apply_edit(ctx: ToolContext, args: dict) -> tuple[str, str]:
@@ -71,7 +125,11 @@ def _apply_edit(ctx: ToolContext, args: dict) -> tuple[str, str]:
     text = _read_text(ctx, args["path"])
     count = text.count(old_s)
     if count == 0:
-        raise ToolError("old_string not found in file; read the file and copy the text exactly (including indentation)")
+        fixed = _match_ignoring_indent(text, old_s, new_s)
+        if fixed is not None:
+            return text, fixed
+        raise ToolError("old_string not found in file; read the file and copy the text exactly (including indentation)."
+                        + _closest_line_hint(text, old_s))
     if count > 1 and not args.get("replace_all"):
         raise ToolError(f"old_string matches {count} places; include more surrounding lines to make it unique, or set replace_all")
     return text, text.replace(old_s, new_s) if args.get("replace_all") else text.replace(old_s, new_s, 1)
@@ -87,7 +145,7 @@ def edit_file(ctx: ToolContext, args: dict) -> str:
     p = ctx.resolve(args["path"])
     p.write_text(new, encoding="utf-8")
     ctx.mark_seen(p)
-    return f"Edited {ctx.rel(p)}"
+    return f"Edited {ctx.rel(p)}" + _validate(p, new)
 
 
 TOOLS = [

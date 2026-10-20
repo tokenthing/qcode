@@ -38,6 +38,20 @@ PLAN MODE IS ON: you may only use read-only tools (read_file, list_dir, glob, gr
 reply with a clear numbered plan of the changes you would make. Don't try to edit files or run commands.
 """
 
+TOOL_EXAMPLE = """
+Example of working well (follow this pattern):
+User: add a greet(name) function to app.py
+You call: read_file {"path": "app.py"}
+Tool: 1\tdef main():\n2\t    print("hi")
+You call: edit_file {"path": "app.py", "old_string": "def main():", "new_string": "def greet(name):\\n    return f\\"Hi {name}\\"\\n\\n\\ndef main():"}
+Tool: Edited app.py
+You call: bash {"command": "python3 -c 'import app; print(app.greet(\\"Sam\\"))'"}
+Tool: exit code 0\nHi Sam
+You reply: Added greet(name) to app.py and checked it works.
+Notes: put file contents in the arguments as the real text: never wrap them in ``` fences. Read a file before \
+changing it, make the change with a tool, check it, then reply briefly.
+"""
+
 CONTINUE_NUDGE = (
     "You said you would take an action but didn't call a tool, so nothing happened. If you still want to do it, "
     "call the tool now. If you're finished, reply with a one-line summary."
@@ -82,11 +96,11 @@ TRANSCRIPT:
 {transcript}"""
 
 
-def build_system_prompt(root: Path, memory: str, mode: str = "ask") -> str:
+def build_system_prompt(root: Path, memory: str, mode: str = "ask", examples: bool = False) -> str:
     return SYSTEM_TEMPLATE.format(
         root=root,
         os=f"{platform.system()} {platform.release()}",
         date=datetime.date.today().isoformat(),
         mode=PLAN_MODE_NOTE if mode == "plan" else "",
         memory=f"\n# Memory\n{memory}\n" if memory else "",
-    )
+    ) + (TOOL_EXAMPLE if examples else "")

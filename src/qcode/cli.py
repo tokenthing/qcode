@@ -103,6 +103,10 @@ def bench(
     list_tasks: bool = typer.Option(False, "--list", help="List the tasks and exit."),
     history: bool = typer.Option(False, "--history", help="Show scores from earlier runs and exit."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before starting."),
+    temperature: Optional[str] = typer.Option(None, "--temperature", help="Override temperature, e.g. 0.2 or default."),
+    thinking: Optional[str] = typer.Option(None, "--thinking", help="default or off (skip qwen3's hidden reasoning)."),
+    examples: Optional[bool] = typer.Option(None, "--examples/--no-examples", help="Add the worked tool-use example to the prompt."),
+    label: str = typer.Option("", "--label", help="Name this run in --history, e.g. 'no-think'."),
 ) -> None:
     """Score models on small, self-checking coding tasks."""
     from openai import APIConnectionError
@@ -125,16 +129,31 @@ def bench(
         for run in past:
             for m in run["models"]:
                 s = m["summary"]
-                rows.append((run["date"].replace("T", " ")[:16], m["model"], f"{s['passed']}/{s['total']}",
+                st = run.get("settings", {})
+                tweaks = st.get("label") or ", ".join(f"{k}={v}" for k, v in st.items() if k != "label" and v not in ("default", False, None))
+                rows.append((run["date"].replace("T", " ")[:16], m["model"], tweaks or "-", f"{s['passed']}/{s['total']}",
                              f"{s['avg_seconds']:.1f}s", f"{s['tokens_per_second']:.0f}", run.get("qcode", "")))
-        ui.print_table([("date", {"style": ui.MUTED}), ("model", {"style": "bold"}), ("passed", {"justify": "right"}),
-                        ("avg time", {"justify": "right"}), ("tok/s", {"justify": "right"}), ("qcode", {"style": ui.MUTED})], rows,
+        ui.print_table([("date", {"style": ui.MUTED}), ("model", {"style": "bold"}), ("settings", {"style": ui.ACCENT2}),
+                        ("passed", {"justify": "right"}), ("avg time", {"justify": "right"}), ("tok/s", {"justify": "right"}),
+                        ("qcode", {"style": ui.MUTED})], rows,
                        footer=f"Full results: {runner.RESULTS_DIR}")
         return
 
     from .servers import ping
 
+    from .config import parse_setting
+
     config = load_config()
+    try:
+        if temperature is not None:
+            config.temperature = parse_setting("temperature", temperature)
+        if thinking is not None:
+            config.thinking = parse_setting("thinking", thinking)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    if examples is not None:
+        config.tool_examples = examples
+    settings = {"temperature": config.temperature, "thinking": config.thinking, "tool_examples": config.tool_examples, "label": label}
     _, server = pick_server(config, server_name, base_url)
     client = LLMClient(server.base_url, server.api_key)
     status = ping(server, timeout=5)
@@ -187,7 +206,7 @@ def bench(
     if not runs:
         return
     runner.print_scoreboard(runs, picked, repeat)
-    path = runner.save_results(runs, server.base_url, picked, repeat)
+    path = runner.save_results(runs, server.base_url, picked, repeat, settings)
     ui.console.print(Text(f"\n  Saved to {path} · qcode bench --history to compare runs", style=ui.MUTED))
 
 

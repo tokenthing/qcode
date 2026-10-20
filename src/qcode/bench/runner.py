@@ -91,6 +91,7 @@ class TaskResult:
     denied: int = 0
     tokens: int = 0
     gen_seconds: float = 0.0
+    transcript: list[str] = field(default_factory=list)  # kept for failed runs, to see what went wrong
 
 
 @dataclass
@@ -149,12 +150,29 @@ def run_task(client, config: Config, model: str, task: Task, timeout: float, max
             except Exception as e:  # a checker bug shouldn't end the run
                 passed, detail = False, f"checker crashed: {type(e).__name__}: {e}"
         stats = agent.last_stats
-        return TaskResult(
+        transcript = [] if passed else compact_transcript(agent.messages[1:])
+        return TaskResult(transcript=transcript,
+            
             model=model, task=task.name, passed=bool(passed), detail=detail, seconds=round(seconds, 2), outcome=outcome,
             tool_calls=bui.tool_calls, tool_errors=bui.tool_errors, denied=bui.denied,
             repairs=stats.repairs if stats else 0, nudges=stats.nudges if stats else 0,
             tokens=stats.tokens if stats else 0, gen_seconds=round(stats.gen_seconds, 2) if stats else 0.0,
         )
+
+
+def compact_transcript(messages: list[dict], limit: int = 300) -> list[str]:
+    out = []
+    for m in messages:
+        if m["role"] == "assistant":
+            if (m.get("content") or "").strip():
+                out.append("SAY  " + " ".join(m["content"].split())[:limit])
+            for tc in m.get("tool_calls") or []:
+                out.append(f"CALL {tc['function']['name']} {tc['function']['arguments'][:limit]}")
+        elif m["role"] == "tool":
+            out.append("  -> " + " | ".join(m["content"].splitlines())[:limit])
+        elif m["role"] == "user":
+            out.append("USER " + " ".join(m["content"].split())[:limit])
+    return out
 
 
 def warm_up(client, model: str) -> ModelRun:
@@ -188,7 +206,7 @@ def run_bench(client, config: Config, models: list[str], tasks: list[Task], repe
     return runs
 
 
-def save_results(runs: list[ModelRun], server: str, tasks: list[Task], repeat: int) -> Path:
+def save_results(runs: list[ModelRun], server: str, tasks: list[Task], repeat: int, settings: dict | None = None) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     path = RESULTS_DIR / f"{datetime.datetime.now():%Y%m%d-%H%M%S}.json"
     data = {
@@ -197,6 +215,7 @@ def save_results(runs: list[ModelRun], server: str, tasks: list[Task], repeat: i
         "server": server,
         "tasks": [t.name for t in tasks],
         "repeat": repeat,
+        "settings": settings or {},
         "models": [{**{k: v for k, v in asdict(r).items() if k != "results"}, "summary": r.summary(),
                     "results": [asdict(x) for x in r.results]} for r in runs],
     }
