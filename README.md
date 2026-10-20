@@ -42,7 +42,7 @@ qcode checks GitHub for a new release once a day and shows `⬆ vX.Y.Z` in the b
 cd your/project
 qcode                              # interactive
 qcode -p "fix the failing test"    # one shot
-qcode -r                           # resume the last session in this folder
+qcode -r                           # resume the last session here: replays the chat and lists its files
 qcode -m qcoder-7b                 # pick a model
 qcode -s laptop                    # use a saved server
 qcode --base-url 192.168.1.50      # one-off server (IP, host:port or URL)
@@ -91,7 +91,7 @@ On Ollama this updates the model on the server, so it applies to everyone using 
 
 | | |
 |---|---|
-| **Conversation** | `/clear` `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
+| **Conversation** | `/clear` (restart qcode fresh; the old session stays saved) `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
 | **Models & servers** | `/model [name]` `/servers` (live ping) `/server <name>` `/add_api_server <name> <ip\|host:port\|url> [key]` `/remove_api_server <name>` |
 | **Project** | `/diff` (uncommitted git changes) `/init` (write QCODE.md) `/memory` `/cwd` |
 | **Web** | `/web <question>` (answers with web access on) · otherwise web tools turn on when you ask for something online |

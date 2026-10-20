@@ -49,7 +49,7 @@ from .servers import SERVERS_FILE, Ping, Server, ServerStore, ping
 COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Conversation", [
         ("/help", "show this help"),
-        ("/clear", "start a fresh conversation"),
+        ("/clear", "restart qcode with a fresh conversation (the old one stays saved)"),
         ("/retry", "drop the last answer and ask again"),
         ("/undo", "revert the file changes from qcode's last turn"),
         ("/compact", "summarize the history to free up context"),
@@ -147,6 +147,24 @@ def strip_latest(name: str) -> str:
     return name.removesuffix(":latest")
 
 
+def restart_fresh() -> None:
+    """Replace this process with a new qcode, same options, minus anything that would resume or re-run a prompt."""
+    args, skip = [], False
+    for a in sys.argv[1:]:
+        if skip:
+            skip = False
+            continue
+        if a in ("-r", "--resume"):
+            continue
+        if a in ("-p", "--prompt"):
+            skip = True
+            continue
+        if a.startswith("--prompt="):
+            continue
+        args.append(a)
+    os.execve(sys.executable, [sys.executable, "-m", "qcode", *args], {**os.environ, "QCODE_FRESH": "1"})
+
+
 def copy_to_clipboard(text: str) -> str:
     """Copy text; returns how it was copied."""
     if sys.platform == "darwin":
@@ -234,6 +252,7 @@ class Repl:
         self.pending_context: list[str] = []
         self._ctx = (0, 1)
         self.session: PromptSession | None = None
+        self.replay_on_start = False  # set by `qcode -r`
         agent.permissions.mode = mode
         agent.refresh_system()
         self.handlers: dict[str, Callable[[str], bool | None]] = {
@@ -382,6 +401,10 @@ class Repl:
             notice=notice,
             mode=self.mode,
         ))
+        if self.replay_on_start:
+            self.show_history()
+        if os.environ.pop("QCODE_FRESH", None):
+            self.ui.ok("Started a fresh session. Your previous one is saved; /resume brings it back.")
         if not p.ok:
             self.ui.warn(f"Can't reach {self.server.name} ({self.server.address}): {p.error}. Check ZeroTier, or use /servers.")
         elif strip_latest(self.agent.model) not in self.cached_models:
@@ -470,11 +493,15 @@ class Repl:
         ui.print_help(COMMAND_GROUPS)
         ui.console.print(Text("  !<command> runs a shell command here; its output goes along with your next message.", style=ui.MUTED))
 
+    def show_history(self) -> None:
+        if len(self.agent.messages) > 1:
+            ui.replay(self.agent.messages, self.agent.file_history(), len(self.agent.checkpoints))
+
     def cmd_clear(self, _: str) -> None:
-        self.agent.reset()
-        self.pending_context.clear()
+        """End this qcode process and start a brand-new one (the old session stays saved for /resume)."""
+        self.agent.save()
         ui.console.clear()
-        self.ui.ok("Started a new conversation.")
+        restart_fresh()
 
     def cmd_retry(self, _: str) -> None:
         text = self.agent.pop_last_turn()
@@ -632,6 +659,8 @@ class Repl:
             return
         self.agent.load_session(found[int(arg) - 1].path)
         n = sum(1 for m in self.agent.messages if m["role"] == "user")
+        ui.console.clear()
+        self.show_history()
         self.ui.ok(f"Resumed session with {n} messages (model {self.agent.model}).")
 
     # --- model & server commands --------------------------------------------------

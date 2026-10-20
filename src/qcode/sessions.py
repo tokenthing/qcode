@@ -30,7 +30,8 @@ MAX_SAVED_CHECKPOINTS = 20
 MAX_CHECKPOINT_FILE_CHARS = 512_000
 
 
-def save(path: Path, root: Path, model: str, messages: list[dict], checkpoints: list[dict] | None = None) -> None:
+def save(path: Path, root: Path, model: str, messages: list[dict], checkpoints: list[dict] | None = None,
+         seen: list[str] | None = None) -> None:
     # Skip the system prompt; it's rebuilt on resume.
     body = [m for m in messages if m["role"] != "system"]
     if not body:
@@ -47,6 +48,7 @@ def save(path: Path, root: Path, model: str, messages: list[dict], checkpoints: 
         "updated": datetime.datetime.now().isoformat(timespec="seconds"),
         "messages": body,
         "checkpoints": kept,
+        "seen": sorted(seen or []),  # files qcode read or wrote, so it can keep editing them after a resume
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 

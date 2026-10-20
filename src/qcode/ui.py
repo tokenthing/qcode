@@ -15,6 +15,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.table import Table
@@ -516,6 +517,54 @@ class TerminalUI:
 
     def spinner(self, msg: str):
         return console.status(Text(msg, style=MUTED), spinner="dots", spinner_style=ACCENT)
+
+
+# --- replaying a resumed session ------------------------------------------------------
+def replay(messages: list[dict], files: dict[str, list[str]], undo_steps: int, max_messages: int = 60) -> None:
+    """Show a resumed conversation the way it looked live: your prompts, replies and tool steps."""
+    from .toolparse import strip_tool_markup
+
+    from .agent import paired_tool_calls
+
+    body = [m for m in messages if m["role"] != "system"]
+    steps: dict[int, list] = {}
+    for owner, name, args, result in paired_tool_calls(body):
+        steps.setdefault(id(owner), []).append((name, args, result))
+    shown = body[-max_messages:]
+    while shown and shown[0]["role"] == "tool":  # don't start in the middle of a tool step
+        shown = shown[1:]
+    ui = TerminalUI()
+    console.print(Rule(Text(" earlier in this session ", style=MUTED), style="#45475a"))
+    if len(shown) < len(body):
+        console.print(Text(f"  … {len(body) - len(shown)} earlier messages not shown", style=MUTED))
+    for m in shown:
+        content = m.get("content") or ""
+        if m["role"] == "user":
+            if content.startswith("[Summary of the earlier conversation]"):
+                console.print(Text("  (older messages were summarized to save context)", style=MUTED))
+                continue
+            if content.startswith("[Web access is on") and "]\n\n" in content:
+                content = content.split("]\n\n", 1)[1]
+            console.print()
+            console.print(Text.assemble(("❯ ", f"bold {ACCENT}"), (content.strip()[:2000], "")))
+        elif m["role"] == "assistant":
+            text = strip_tool_markup(content)
+            if text and text != "Understood. Continuing from that summary.":
+                console.print()
+                console.print(_assistant(text))
+            for name, args, result in steps.get(id(m), []):
+                ui.tool_call(name, args)
+                ui.tool_result(name, args, result, result.startswith("Error"))
+    console.print()
+    parts = [(label, files[key]) for key, label in (("created", "created"), ("edited", "edited"), ("read", "read")) if files.get(key)]
+    if parts or undo_steps:
+        lines = [Text.assemble((f"  {label:<8}", MUTED), (", ".join(paths[:12]) + (f" (+{len(paths) - 12} more)" if len(paths) > 12 else ""), ""))
+                 for label, paths in parts]
+        if undo_steps:
+            lines.append(Text(f"  /undo can revert the last {undo_steps} turn{'s' if undo_steps != 1 else ''} that changed files", style=MUTED))
+        console.print(Panel(Group(*lines), title=f"[bold {ACCENT2}]Files in this session[/]", title_align="left",
+                            border_style="#45475a", box=box.ROUNDED, padding=(0, 1), expand=False))
+    console.print(Rule(Text(" resumed: keep going ", style=MUTED), style="#45475a"))
 
 
 # --- screens -------------------------------------------------------------------------

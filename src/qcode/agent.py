@@ -106,6 +106,27 @@ def stall_reason(text: str, tool_names, acted: bool, web_turn: bool = False) -> 
     return None
 
 
+def paired_tool_calls(messages: list[dict]):
+    """(name, args, result) for every tool call, matched to the result that follows it (ids aren't always unique)."""
+    out = []
+    for i, m in enumerate(messages):
+        calls = m.get("tool_calls") or []
+        if m["role"] != "assistant" or not calls:
+            continue
+        following = []
+        for later in messages[i + 1:]:
+            if later["role"] != "tool":
+                break
+            following.append(later.get("content", ""))
+        for k, tc in enumerate(calls):
+            try:
+                args = json.loads(tc["function"]["arguments"] or "{}")
+            except ValueError:
+                args = {}
+            out.append((m, tc["function"]["name"], args if isinstance(args, dict) else {}, following[k] if k < len(following) else ""))
+    return out
+
+
 def looks_unfinished(text: str) -> bool:
     """True when a reply ends by announcing an action (and didn't ask the user anything)."""
     return stall_reason(text, (), acted=True) is not None and stall_reason(text, (), acted=True)[0] == "announced"
@@ -172,12 +193,32 @@ class Agent:
         self.messages = [self._system_message(), *data["messages"]]
         self.session_path = path
         self.checkpoints = [Checkpoint(c["prompt"], dict(c["files"])) for c in data.get("checkpoints", [])]
+        self.ctx.seen = {p for p in data.get("seen", []) if Path(p).exists()}
         if data.get("model"):
             self.model = data["model"]
 
     def save(self) -> None:
         sessions.save(self.session_path, self.root, self.model, self.messages,
-                      [{"prompt": c.prompt, "files": c.files} for c in self.checkpoints])
+                      [{"prompt": c.prompt, "files": c.files} for c in self.checkpoints], sorted(self.ctx.seen))
+
+    def file_history(self) -> dict[str, list[str]]:
+        """Files this conversation created, edited and read (relative paths, in first-seen order)."""
+        found: dict[str, list[str]] = {"created": [], "edited": [], "read": []}
+        for _, name, args, result in paired_tool_calls(self.messages):
+            if name in ("write_file", "edit_file", "read_file"):
+                path = str(args.get("path", ""))
+                if not path or result.startswith("Error"):
+                    continue
+                kind = "read" if name == "read_file" else "created" if result.startswith("Created") else "edited"
+                try:
+                    path = self.ctx.rel(self.ctx.resolve(path))
+                except ToolError:
+                    pass
+                if path not in found[kind]:
+                    found[kind].append(path)
+        found["read"] = [p for p in found["read"] if p not in found["created"] and p not in found["edited"]]
+        found["edited"] = [p for p in found["edited"] if p not in found["created"]]
+        return found
 
     def forget_context_sizes(self) -> None:
         """Drop cached context sizes (after /context set or a server change)."""
@@ -282,7 +323,7 @@ class Agent:
             if not calls:
                 parsed, remaining = extract_text_tool_calls(content, set(self.turn_tools) | set(WEB_TOOLS))
                 if parsed:
-                    calls = [ToolCall(f"call_text_{i}", c.name, json.dumps(c.arguments)) for i, c in enumerate(parsed)]
+                    calls = [ToolCall(f"call_text_{len(self.messages)}_{i}", c.name, json.dumps(c.arguments)) for i, c in enumerate(parsed)]
                     content = remaining
 
             msg: dict = {"role": "assistant", "content": content}

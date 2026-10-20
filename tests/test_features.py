@@ -313,3 +313,50 @@ def test_thinking_off_and_examples_reach_the_model(root):
     assert config.parse_setting("thinking", "off") == "off"
     with pytest.raises(ValueError):
         config.parse_setting("thinking", "maybe")
+
+
+# --- resume shows history; /clear restarts --------------------------------------------
+def test_file_history_and_seen_files_survive_resume(root):
+    (root / "old.py").write_text("x = 1\n")
+    (root / "notes.txt").write_text("hi\n")
+    agent, *_ = make_agent(root, [
+        ("", [call("read_file", path="old.py"), call("read_file", path="notes.txt")]),
+        ("", [call("edit_file", path="old.py", old_string="x = 1", new_string="x = 2"),
+              call("write_file", path="new.py", content="print(1)\n")]),
+        ("", [call("read_file", path="missing.py")]),
+        ("done", []),
+    ])
+    agent.run("change things")
+    assert agent.file_history() == {"created": ["new.py"], "edited": ["old.py"], "read": ["notes.txt"]}
+    agent2, *_ = make_agent(root, [("", [call("write_file", path="notes.txt", content="rewritten\n")]), ("ok", [])])
+    agent2.load_session(agent.session_path)
+    assert str(root / "notes.txt") in agent2.ctx.seen        # already read, so no need to read it again
+    agent2.run("rewrite notes.txt")
+    assert (root / "notes.txt").read_text() == "rewritten\n"
+
+
+def test_replay_renders_a_session(root):
+    from rich.console import Console
+    import qcode.ui as ui
+
+    agent, *_ = make_agent(root, [("", [call("write_file", path="a.py", content="x = 1\n")]), ("Made **a.py**.", [])])
+    agent.run("make a.py")
+    rec = Console(record=True, width=100)
+    old, ui.console = ui.console, rec
+    try:
+        ui.replay(agent.messages, agent.file_history(), len(agent.checkpoints))
+    finally:
+        ui.console = old
+    out = rec.export_text()
+    assert "❯ make a.py" in out and "Write(a.py)" in out and "Made a.py." in out
+    assert "Files in this session" in out and "created" in out and "/undo can revert the last 1 turn" in out
+
+
+def test_clear_restarts_without_resume_or_prompt(monkeypatch):
+    import qcode.repl as repl
+
+    seen = {}
+    monkeypatch.setattr(repl.sys, "argv", ["qcode", "-r", "-m", "qwen3:14b", "--prompt", "hello", "--yolo"])
+    monkeypatch.setattr(repl.os, "execve", lambda exe, argv, env: seen.update(argv=argv, fresh=env.get("QCODE_FRESH")))
+    repl.restart_fresh()
+    assert seen["argv"][1:] == ["-m", "qcode", "-m", "qwen3:14b", "--yolo"] and seen["fresh"] == "1"

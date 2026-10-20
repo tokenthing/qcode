@@ -80,11 +80,11 @@ def main(
             agent.load_session(found[0].path)
             if model:
                 agent.model = model
-            ui.ok(f"Resumed: {found[0].first_prompt}")
         else:
             ui.info("No previous session for this folder; starting fresh.")
 
     repl = Repl(agent, store, server, mode=start_mode)
+    repl.replay_on_start = resume and len(agent.messages) > 1
     if prompt:
         repl.ask(prompt)
         return
