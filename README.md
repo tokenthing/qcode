@@ -19,16 +19,16 @@ python3 install_qcode.py        # Windows: py install_qcode.py
 It works on macOS, Linux, Raspberry Pi and Windows, needs Python 3.9+, and doesn't need admin rights. The installer:
 1. Picks the newest working Python on the machine (it skips known-broken releases such as 3.10.0) and creates a private environment in `~/.local/share/qcode` (Windows: `%LOCALAPPDATA%\qcode`). On Debian, Ubuntu or Raspberry Pi OS it offers to `apt install python3-venv` if needed.
 2. Installs qcode and adds a `qcode` command to your PATH (zsh, bash, fish or the Windows user PATH).
-3. Asks for your model server, tests it, and lets you choose a default model.
+3. Asks for your model server (there's no built-in default), tests it, and lets you choose a default model. Skip it and qcode asks the first time it starts. Either way it's saved, so you only enter it once.
 4. If the server is unreachable, offers to install ZeroTier and join your network. The network owner then approves the device at my.zerotier.com.
 
 Run it again to reinstall. Flags: `--yes`, `--server ADDR --name NAME --model M`, `--reconfigure`, `--uninstall [--purge]`.
 
 **Sharing with family or friends:** create `installer/defaults.json` (it's git-ignored):
 ```json
-{"server": "192.186.1.50", "server_name": "home", "zerotier_network": "0123456789abcdef"}
+{"server_name": "home", "zerotier_network": "0123456789abcdef"}
 ```
-Then run `python3 scripts/build_installer.py`. `dist/install_qcode.py` will have your server and network pre-filled.
+Then run `python3 scripts/build_installer.py`. `dist/install_qcode.py` will have your ZeroTier network pre-filled; people still type the server address themselves. (You can add `"server": "…"` to pre-fill that too.)
 
 ## Updating
 

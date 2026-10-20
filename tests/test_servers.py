@@ -17,7 +17,7 @@ def test_normalize_url(raw, expected):
     assert normalize_url(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["", "ftp://x", "10.0.0.1:notaport"])
+@pytest.mark.parametrize("raw", ["", "ftp://x", "10.0.0.1:notaport", "not a url!!", "gpu box", "a_b.local"])
 def test_normalize_url_rejects(raw):
     with pytest.raises(ValueError):
         normalize_url(raw)

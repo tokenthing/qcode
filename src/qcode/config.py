@@ -23,9 +23,8 @@ DEFAULT_TOML = """\
 # Everything here is optional; a missing setting uses the default shown.
 
 # ── Server & model ─────────────────────────────────────────────────────────────
-# First API server, saved as "home" on first run. After that, manage servers inside qcode with
-# /servers, /server <name>, /add_api_server and /remove_api_server (stored in servers.json).
-base_url = "http://localhost:11434/v1"
+# Servers are saved in servers.json. qcode asks for the first one when it starts; after that use
+# /servers, /server <name>, /add_api_server and /remove_api_server. (There is no default address.)
 api_key = "ollama"            # Ollama ignores it, but the OpenAI client requires one
 model = "qcoder-14b"          # default model for new sessions
 temperature = "default"       # 0 = focused … 2 = creative, or "default" for the model's own
@@ -100,7 +99,7 @@ SETTABLE: dict[str, Setting] = {s.key: s for s in SETTINGS}
 
 @dataclass
 class Config:
-    base_url: str = "http://localhost:11434/v1"
+    base_url: str = ""  # legacy: older configs named the first server here; it's moved into servers.json
     api_key: str = "ollama"
     model: str = "qcoder-14b"
     temperature: object = "default"  # "default" or a float

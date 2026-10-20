@@ -477,8 +477,8 @@ def configure():
 
     name = ARGS.name or ask("Name for the model server", DEFAULT_SERVER_NAME)
     address = ARGS.server or ask("Model server address (IP, host:port or URL)", DEFAULT_SERVER)
-    if not address and (ARGS.yes or not sys.stdin.isatty()):
-        warn("No server address given. Add one later inside qcode with /add_api_server, or rerun with --server.")
+    if not address:
+        info("No server address given; qcode will ask for it the first time you start it.")
         return None
     while True:
         try:

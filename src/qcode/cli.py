@@ -20,9 +20,24 @@ app = typer.Typer(add_completion=False, help="A terminal coding agent for your s
 
 
 def pick_server(config, server_name: Optional[str], base_url: Optional[str]) -> tuple[ServerStore, Server]:
-    store = ServerStore(seed=Server("home", normalize_url(config.base_url), config.api_key))
+    # Older configs had base_url; it becomes the first saved server. New installs start with none.
+    seed = Server("home", normalize_url(config.base_url), config.api_key) if config.base_url else None
+    store = ServerStore(seed=seed)
     if base_url:
         return store, Server("custom", normalize_url(base_url), config.api_key)
+    if not store.servers:
+        from .onboarding import can_ask, first_run_setup
+
+        if not can_ask():
+            raise typer.BadParameter("no model server saved yet. Run `qcode` once in a terminal to set one up, "
+                                     "or pass --base-url <ip>.", param_hint="server")
+        server = first_run_setup(store, config.api_key)
+        if server is None:
+            from . import ui
+
+            ui.console.print("  No server set up yet. Run qcode again when you're ready.")
+            raise typer.Exit(0)
+        return store, server
     if server_name:
         server = store.get(server_name)
         if server is None:

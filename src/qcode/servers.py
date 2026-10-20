@@ -16,6 +16,7 @@ from .config import CONFIG_DIR
 SERVERS_FILE = CONFIG_DIR / "servers.json"
 DEFAULT_PORT = 11434
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+HOST_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9a-fA-F:]+$")
 
 
 @dataclass
@@ -46,6 +47,8 @@ def normalize_url(raw: str) -> str:
     u = urlparse(raw if had_scheme else f"http://{raw}")
     if u.scheme not in ("http", "https") or not u.hostname:
         raise ValueError(f"can't parse address {raw!r}")
+    if not HOST_RE.match(u.hostname):
+        raise ValueError(f"{u.hostname!r} isn't a valid host name or IP address")
     netloc = u.netloc
     try:
         if not had_scheme and u.port is None:
