@@ -94,6 +94,7 @@ On Ollama this updates the model on the server, so it applies to everyone using 
 | **Conversation** | `/clear` `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
 | **Models & servers** | `/model [name]` `/servers` (live ping) `/server <name>` `/add_api_server <name> <ip\|host:port\|url> [key]` `/remove_api_server <name>` |
 | **Project** | `/diff` (uncommitted git changes) `/init` (write QCODE.md) `/memory` `/cwd` |
+| **Web** | `/web <question>` (answers with web access on) · otherwise web tools turn on when you ask for something online |
 | **Settings** | `/settings` (menu) · `/mode [ask\|auto-edit\|auto\|plan]` · `/context set <tokens>` · `/config` · `/config set <key> <value>` · `/config edit` · `/permissions [reset\|remove n]` · `/tools` |
 | **App** | `/status` `/doctor` (diagnostics) `/version` `/update` `/help` `/exit` |
 | **Command line** | `qcode bench` — score models (see below) |
@@ -120,6 +121,22 @@ num_ctx = 32768
 - `~/.config/qcode/config.toml` holds every setting from `/settings`, the allow rules and per-model context sizes for non-Ollama servers. Each line is commented.
 - Per-project approvals are saved in `.qcode/settings.json`.
 - `QCODE.md` in the project root (and `~/.config/qcode/QCODE.md`) is added to the system prompt. Use `/init` to generate one.
+
+## Web access
+
+qcode can search the web (DuckDuckGo), read pages and check the weather (Open-Meteo). It needs no API keys. **It only goes online when your message asks for it**, for example:
+
+```
+what's the weather today in my location
+search the web for the asyncio TaskGroup docs
+look up the latest release of ripgrep
+summarize https://docs.python.org/3/whatsnew/3.13.html
+/web what changed in Django 5.2        ← force web access for one question
+```
+
+Ordinary coding requests never offer the model any web tools.
+- **Web access setting** (`/settings`): `when-asked` (the default), `always` or `off`.
+- **Location setting**, e.g. `Bangkok`: used for weather and local questions, and only sent on web requests. If it's not set, the model asks you.
 
 ## Benchmarking models
 
@@ -159,7 +176,7 @@ Re-run it after `ollama pull`, because pulling resets a model's settings. On an 
 ## How it works
 
 - `agent.py` runs the loop: stream the reply, run its tool calls, feed the results back, and repeat until the model answers without tools (at most `max_steps`). File edits are checkpointed per turn for `/undo`.
-- Tools: `read_file` (paged), `write_file`, `edit_file` (exact unique match), `list_dir`, `glob`, `grep`, `bash`. File tools can't leave the project root.
+- Tools: `read_file` (paged), `write_file`, `edit_file` (exact unique match), `list_dir`, `glob`, `grep`, `bash`. File tools can't leave the project root. Web tools (`web_search`, `web_fetch`, `weather`) are added only on turns that ask for something online.
 - Read-only tools run freely. Writes and `bash` follow the permission mode, and in `ask` mode you approve once, for the session, or for the project. Allow rules never auto-approve chained shell commands (`;`, `&&`, `|`, `$(`…).
 - Safety net: the model can't overwrite a file it hasn't read this session. An overwrite that would delete most of a file gets a red warning. `/undo` history is saved with the session, so it survives restarts.
 - Qwen2.5-Coder often writes tool calls as plain JSON. `toolparse.py` recovers them (bare JSON, fenced JSON or `<tool_call>` tags).

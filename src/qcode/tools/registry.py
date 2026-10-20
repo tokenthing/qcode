@@ -18,6 +18,7 @@ class ToolContext:
     root: Path
     guard_overwrite: bool = True  # refuse write_file over an existing file that wasn't read or written this session
     seen: set[str] = field(default_factory=set)  # absolute paths read or written this session
+    location: str = ""  # the user's saved location, for the weather tool
 
     def mark_seen(self, p: Path) -> None:
         self.seen.add(str(p))

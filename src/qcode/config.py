@@ -44,6 +44,12 @@ compact_at = 80               # summarize the history when the context is this %
 # ── Updates ────────────────────────────────────────────────────────────────────
 auto_update = "notify"        # notify | auto | off: checks GitHub for new releases once a day
 
+# ── Web ────────────────────────────────────────────────────────────────────────
+web_access = "when-asked"     # when-asked: web tools only for messages that ask for something online
+                              #   ("search…", "look up…", "weather today", a link, or /web <question>)
+                              # always: every message · off: never
+location = ""                 # your city, e.g. "Bangkok", used for weather questions (only sent on web requests)
+
 # ── Approvals ──────────────────────────────────────────────────────────────────
 # Rules that never need approval. Match "<tool>" or "bash:<command>" (glob syntax).
 # Read-only tools (read_file, list_dir, glob, grep) are always allowed.
@@ -65,6 +71,7 @@ num_ctx = 32768
 
 DEFAULT_NUM_CTX = 8192
 AUTO_UPDATE_MODES = ("notify", "auto", "off")
+WEB_ACCESS_MODES = ("when-asked", "always", "off")
 PERMISSION_MODES = ("ask", "auto-edit", "auto", "plan")
 MODE_ALIASES = {"yolo": "auto", "autoedit": "auto-edit", "edit": "auto-edit", "default": "ask", "normal": "ask", "readonly": "plan", "read-only": "plan"}
 
@@ -72,7 +79,7 @@ MODE_ALIASES = {"yolo": "auto", "autoedit": "auto-edit", "edit": "auto-edit", "d
 @dataclass(frozen=True)
 class Setting:
     key: str
-    kind: str  # "int" | "bool" | "choice" | "str" | "temperature"
+    kind: str  # "int" | "bool" | "choice" | "str" (non-empty) | "text" (may be empty) | "temperature"
     label: str
     help: str
     choices: tuple = ()
@@ -91,6 +98,9 @@ SETTINGS: list[Setting] = [
     Setting("compact_at", "int", "Compact history at (%)", "summarize older messages when the context window is this full", lo=50, hi=95),
     Setting("max_steps", "int", "Max steps per prompt", "how many tool round trips the model may take for one request", lo=1, hi=200),
     Setting("tool_output_limit", "int", "Tool output limit", "characters of each tool result sent to the model", lo=500, hi=200000),
+    Setting("web_access", "choice", "Web access",
+            "when-asked: search the web only when your message asks for it · always · off", choices=WEB_ACCESS_MODES),
+    Setting("location", "text", "Location", "your city for weather and local questions, e.g. Bangkok (empty = ask when needed)"),
     Setting("auto_update", "choice", "Updates", "notify: show when a release is out · auto: install it at startup · off: never check",
             choices=AUTO_UPDATE_MODES),
 ]
@@ -110,6 +120,8 @@ class Config:
     tool_output_limit: int = 4000
     compact_at: int = 80
     auto_update: str = "notify"
+    web_access: str = "when-asked"
+    location: str = ""
     allow: list[str] = field(default_factory=list)
     models: dict[str, dict] = field(default_factory=dict)
 
@@ -196,6 +208,8 @@ def parse_setting(key: str, raw: str):
         if not s.lo <= t <= s.hi:
             raise ValueError(f"temperature must be between {s.lo:g} and {s.hi:g}")
         return t
+    if s.kind == "text":
+        return raw  # may be empty
     if not raw:
         raise ValueError(f"{key} can't be empty")
     return raw

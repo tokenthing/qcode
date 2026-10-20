@@ -61,6 +61,9 @@ TOOL_LABELS = {
     "glob": "Glob",
     "grep": "Search",
     "bash": "Bash",
+    "web_search": "Web search",
+    "web_fetch": "Fetch",
+    "weather": "Weather",
 }
 
 VERBS = ["Thinking", "Pondering", "Cooking", "Brewing", "Tinkering", "Crunching", "Scheming", "Noodling", "Mulling", "Conjuring"]
@@ -86,6 +89,12 @@ def tool_target(name: str, args: dict) -> str:
     if name == "bash":
         cmd = " ".join(args.get("command", "").split())
         return cmd if len(cmd) <= 90 else cmd[:87] + "…"
+    if name == "web_search":
+        return args.get("query", "")
+    if name == "web_fetch":
+        return args.get("url", "") + (f", find {args['find']!r}" if args.get("find") else "")
+    if name == "weather":
+        return args.get("location") or "your location"
     if "path" in args:
         extra = f", from line {args['offset']}" if args.get("offset") else ""
         return f"{args['path']}{extra}"
@@ -419,6 +428,16 @@ class TerminalUI:
             n = 0 if result in ("No matches", "No files matched") else sum(1 for l in lines if not l.startswith("..."))
             noun = "match" if name == "grep" else "file"
             summary = Text(f"Found {n} {noun}{'es' if noun == 'match' and n != 1 else 's' if n != 1 else ''}", style=MUTED)
+        elif name == "web_search":
+            n = sum(1 for l in lines if re.match(r"^\d+\. ", l))
+            summary = Text(f"Found {n} result{'s' if n != 1 else ''}" if n else (lines[0] if lines else ""), style=MUTED)
+            hits = [l.strip() for l in lines if l.startswith("   http")][:3]
+            if hits:
+                extra = Text("\n".join(hits), style=MUTED)
+        elif name == "web_fetch":
+            summary = Text(f"Read {len(result):,} characters" + (f" · {lines[0][:60]}" if lines else ""), style=MUTED)
+        elif name == "weather":
+            summary = Text(lines[1] if len(lines) > 1 else (lines[0] if lines else ""), style=MUTED)
         elif name == "list_dir":
             summary = Text(f"Listed {len(lines)} entries", style=MUTED)
         else:

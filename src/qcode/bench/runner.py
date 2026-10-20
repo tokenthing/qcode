@@ -124,7 +124,7 @@ def run_task(client, config: Config, model: str, task: Task, timeout: float, max
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
         cfg = dataclasses.replace(config, model=model, max_steps=max_steps, auto_continue=True, read_before_write=True,
-                                  allow=[], models=dict(config.models))
+                                  allow=[], models=dict(config.models), web_access="off")
         bui = BenchUI(time.monotonic() + timeout)
         agent = Agent(client, cfg, root, Permissions(root, [], bench_approve, mode="ask"), bui,
                       session_path=Path(scratch) / "session.json")

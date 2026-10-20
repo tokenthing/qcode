@@ -54,6 +54,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("/undo", "revert the file changes from qcode's last turn"),
         ("/compact", "summarize the history to free up context"),
         ("/context", "what's using the context · /context set <tokens|16k|max> to resize it"),
+        ("/web", "ask with web access on, e.g. /web latest Python version"),
         ("/copy", "copy the last reply to the clipboard"),
         ("/export", "save the conversation as Markdown: /export [file]"),
         ("/resume", "list recent sessions in this folder, or /resume <n>"),
@@ -260,6 +261,7 @@ class Repl:
             "/permissions": self.cmd_permissions,
             "/yolo": self.cmd_yolo,
             "/settings": self.cmd_settings,
+            "/web": self.cmd_web,
             "/setting": self.cmd_settings,
             "/mode": self.cmd_mode,
             "/tools": self.cmd_tools,
@@ -423,13 +425,13 @@ class Repl:
             self.ask(line)
         ui.console.print(Text("  bye 👋", style=ui.MUTED))
 
-    def ask(self, text: str) -> None:
+    def ask(self, text: str, web: bool | None = None) -> None:
         label = text
         if self.pending_context:
             text = "\n\n".join(self.pending_context) + "\n\n" + text
             self.pending_context.clear()
         try:
-            self.agent.run(text, label=label)
+            self.agent.run(text, label=label, web=web)
             self.server_ok = True
         except APIConnectionError:
             self.server_ok = False
@@ -799,6 +801,8 @@ class Repl:
         value = getattr(self.agent.config, key)
         if isinstance(value, bool):
             return "on" if value else "off"
+        if key == "location" and not value:
+            return "not set"
         if key == "compact_at":
             return f"{value}%"
         if key in ("tool_output_limit",):
@@ -860,11 +864,22 @@ class Repl:
         setattr(self.agent.config, key, value)
         if key == "read_before_write":
             self.agent.ctx.guard_overwrite = value
+        elif key == "location":
+            self.agent.ctx.location = value
         elif key == "default_mode":
             self.set_mode(value)
         self.ui.ok(f"{SETTABLE[key].label}: {self._setting_value(key)}")
         if key == "model" and strip_latest(value) != strip_latest(self.agent.model):
             self.ui.info(f"That's the default for new sessions. Use /model {value} to switch right now.")
+
+    def cmd_web(self, arg: str) -> None:
+        if self.agent.config.web_access == "off":
+            self.ui.warn("Web access is off. Turn it on in /settings → Web access.")
+            return
+        if not arg:
+            self.ui.info("Usage: /web <question>, e.g. /web what's new in Python 3.13")
+            return
+        self.ask(arg, web=True)
 
     def cmd_mode(self, arg: str) -> None:
         if not arg:
@@ -968,8 +983,14 @@ class Repl:
 
     def cmd_tools(self, _: str) -> None:
         rows = []
-        for t in self.agent.tools.values():
-            if t.read_only:
+        from .tools import WEB_TOOLS
+
+        web = self.agent.config.web_access
+        for t in [*self.agent.tools.values(), *WEB_TOOLS.values()]:
+            if t.name in WEB_TOOLS:
+                access = Text({"off": "off", "always": "web, every message"}.get(web, "web, when you ask"),
+                              style=ui.MUTED if web == "off" else ui.ACCENT2)
+            elif t.read_only:
                 access = Text("read-only", style=ui.OK)
             elif self.mode == "plan":
                 access = Text("off (plan mode)", style=ui.ACCENT2)

@@ -18,7 +18,7 @@ from .memory import load_memory
 from .permissions import Permissions
 from .prompts import COMPACT_PROMPT, CONTINUE_NUDGE, build_system_prompt
 from .toolparse import broken_call_error, extract_text_tool_calls
-from .tools import ALL_TOOLS, ToolContext, ToolError, normalize_args
+from .tools import ALL_TOOLS, WEB_TOOLS, ToolContext, ToolError, normalize_args
 
 DENIED = "The user denied this tool call. Stop and wait for their instructions."
 MAX_REPAIRS = 2  # times per turn we ask the model to rewrite a tool call we couldn't read
@@ -29,6 +29,28 @@ _INTENT_RE = re.compile(
     r"\b(?:i'll|i will|i'm going to|let me|now i'll|next,? i'll|i'll now)\b.*\b(?:write|save|create|update|apply|add|"
     r"edit|change|run|read|make|fix|implement|modify|replace|polish|style)\b",
     re.I,
+)
+
+
+# Messages that ask for something online. This only decides whether web tools are *offered*;
+# the model still chooses whether to use them.
+_WEB_INTENT_RE = re.compile(
+    r"https?://|\b(?:search(?:\s+(?:the\s+)?(?:web|internet|online|for))?|look\s*(?:it\s*)?up|google|duckduckgo|browse|"
+    r"on\s+the\s+(?:web|internet)|online|website|news|headlines|latest|newest|weather|forecast|temperature\s+(?:in|today|outside)|"
+    r"rain(?:ing)?\s+(?:today|tomorrow)|today|tonight|tomorrow|this\s+(?:week|weekend)|right\s+now|"
+    r"price\s+of|exchange\s+rate|stock\s+price|who\s+won|score\s+of|release\s+date|changelog)\b",
+    re.I,
+)
+
+
+def wants_web(text: str) -> bool:
+    return bool(_WEB_INTENT_RE.search(text or ""))
+
+
+WEB_NOTE = (
+    "[Web access is on for this message because the user asked about something online. Use web_search, then call "
+    "web_fetch yourself on the most relevant result (don't ask the user which one to open), or use weather for weather "
+    "questions. Answer the question directly and say which sources you used.{location}]\n\n"
 )
 
 
@@ -70,10 +92,11 @@ class Agent:
         self.config = config
         self.model = config.model
         self.root = root
-        self.ctx = ToolContext(root, guard_overwrite=config.read_before_write)
+        self.ctx = ToolContext(root, guard_overwrite=config.read_before_write, location=config.location)
         self.permissions = permissions
         self.ui = ui
-        self.tools = ALL_TOOLS
+        self.tools = ALL_TOOLS        # always available
+        self.turn_tools = ALL_TOOLS   # what this turn offers (adds WEB_TOOLS when the user asked for the web)
         self.session_path = session_path or sessions.new_session_path()
         self.messages: list[dict] = [self._system_message()]
         self._ctx_cache: dict[tuple[str, str], int] = {}
@@ -140,8 +163,25 @@ class Agent:
         return estimate_tokens(self.messages) + estimate_tokens([t.schema() for t in self.tools.values()])
 
     # --- main loop ----------------------------------------------------------------
-    def run(self, user_text: str, label: str | None = None) -> None:
-        """Run one user turn. `label` is what /undo shows for it (defaults to user_text)."""
+    def web_enabled_for(self, text: str, force: bool | None = None) -> bool:
+        mode = getattr(self.config, "web_access", "when-asked")
+        if mode == "off":
+            return False
+        if force is not None:
+            return force
+        return mode == "always" or wants_web(text)
+
+    def run(self, user_text: str, label: str | None = None, web: bool | None = None) -> None:
+        """Run one user turn. `label` is what /undo shows for it (defaults to user_text).
+        `web` forces web tools on/off for this turn; None decides from the message (see web_access)."""
+        if user_text.startswith("[Web access is on") and "]\n\n" in user_text:  # e.g. /retry of a web turn
+            user_text = user_text.split("]\n\n", 1)[1]
+        use_web = self.web_enabled_for(label or user_text, web)
+        self.turn_tools = {**self.tools, **WEB_TOOLS} if use_web else self.tools
+        self.ctx.location = self.config.location
+        if use_web:
+            where = f" The user's location: {self.config.location}." if self.config.location else ""
+            user_text = WEB_NOTE.format(location=where) + user_text
         start_len = len(self.messages)
         stats = TurnStats(self.model)
         self.last_stats = stats  # readable even if the turn ends in an exception
@@ -169,7 +209,7 @@ class Agent:
         self.ui.turn_done(stats)
 
     def _loop(self, stats: TurnStats) -> None:
-        schemas = [t.schema() for t in self.tools.values()]
+        schemas = [t.schema() for t in self.turn_tools.values()]
         repairs = nudged = 0
         extra = {} if self.config.temperature_value is None else {"temperature": self.config.temperature_value}
         for _ in range(self.config.max_steps):
@@ -184,7 +224,7 @@ class Agent:
             stats.tokens += getattr(self.client, "last_completion_tokens", 0) or 0
 
             if not calls:
-                parsed, remaining = extract_text_tool_calls(content, set(self.tools))
+                parsed, remaining = extract_text_tool_calls(content, set(self.turn_tools) | set(WEB_TOOLS))
                 if parsed:
                     calls = [ToolCall(f"call_text_{i}", c.name, json.dumps(c.arguments)) for i, c in enumerate(parsed)]
                     content = remaining
@@ -196,7 +236,7 @@ class Agent:
                 ]
             self.messages.append(msg)
             if not calls:
-                problem = broken_call_error(content, set(self.tools))
+                problem = broken_call_error(content, set(self.turn_tools))
                 if problem and repairs < MAX_REPAIRS:
                     repairs += 1
                     stats.repairs += 1
@@ -228,9 +268,12 @@ class Agent:
 
     def _execute(self, call: ToolCall) -> tuple[str, bool]:
         """Run one tool call. Returns (result text, stop_turn)."""
-        tool = self.tools.get(call.name)
+        tool = self.turn_tools.get(call.name)
+        if tool is None and call.name in WEB_TOOLS:
+            return ("Error: web tools are only available when the user asks for something online. Answer from what "
+                    "you know, or tell the user they can ask you to search the web."), False
         if tool is None:
-            return f"Error: unknown tool '{call.name}'. Available: {', '.join(self.tools)}", False
+            return f"Error: unknown tool '{call.name}'. Available: {', '.join(self.turn_tools)}", False
         try:
             args = json.loads(call.arguments or "{}")
             if not isinstance(args, dict):
