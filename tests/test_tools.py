@@ -84,3 +84,24 @@ def test_normalize_args_fixes_common_wrong_names():
 def test_edit_missing_file_points_to_write_file(root):
     with pytest.raises(ToolError, match="call write_file"):
         run(root, "edit_file", path="new.html", old_string="", new_string="<html>")
+
+
+def test_clean_file_content_fixes_small_model_mistakes():
+    from qcode.tools.registry import clean_file_content
+    # exactly what qwen3 wrote for the Pluse prototype: fenced, unclosed, with a JSON tail
+    mangled = '```python\n# Pluse CLI Prototype\n\nhabits = []\nprint("ok")\n"}'
+    assert clean_file_content("src/main.py", mangled) == '# Pluse CLI Prototype\n\nhabits = []\nprint("ok")'
+    assert clean_file_content("a.py", "```py\nx = 1\n```\n") == "x = 1\n"
+    # double-escaped: one long line full of literal \n
+    assert clean_file_content("a.py", 'def main():\\n    print(\\"hi\\")\\n\\nmain()') == 'def main():\n    print("hi")\n\nmain()'
+    # left alone: normal code, Markdown that starts with a fence, code containing real \n escapes
+    normal = 'print("a\\nb")\nx = "}"\n'
+    assert clean_file_content("a.py", normal) == normal
+    md = "```bash\nls\n```\n\nMore docs\n"
+    assert clean_file_content("README.md", md) == md
+
+
+def test_write_file_tool_gets_cleaned_content():
+    from qcode.tools import normalize_args
+    args = normalize_args(ALL_TOOLS["write_file"], {"path": "x.py", "content": "```python\nx = 1\n```"})
+    assert args["content"] == "x = 1"

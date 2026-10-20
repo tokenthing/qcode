@@ -65,8 +65,35 @@ ARG_ALIASES: dict[str, list[str]] = {
 }
 
 
+def clean_file_content(path: str, content: str) -> str:
+    """Undo common small-model mistakes in write_file content:
+    - the whole file wrapped in a Markdown code fence (```python … ```), sometimes left unclosed;
+    - a stray JSON tail like `"}` left on its own last line;
+    - double-escaped text: no real line breaks, only literal backslash-n sequences."""
+    if not isinstance(content, str):
+        return content
+    text = content
+    if "\n" not in text and text.count("\\n") >= 2:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    is_markdown = path.lower().endswith((".md", ".markdown", ".mdx"))
+    lines = text.split("\n")
+    if not is_markdown and lines and lines[0].strip().startswith("```") and len(lines) > 1:
+        lines = lines[1:]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines and lines[-1].strip() == "```":
+            lines.pop()
+    while lines and lines[-1].strip() in ('"}', '"}}', '"}]', "'}"):  # leaked end of the JSON tool call
+        lines.pop()
+    cleaned = "\n".join(lines)
+    if content.endswith("\n") and not cleaned.endswith("\n"):
+        cleaned += "\n"
+    return cleaned
+
+
 def normalize_args(tool: "Tool", args: dict) -> dict:
-    """Rename well-known wrong parameter names to the tool's real ones (only for parameters that are missing)."""
+    """Rename well-known wrong parameter names to the tool's real ones (only for parameters that are missing),
+    and clean up write_file content that small models commonly mangle."""
     props = tool.parameters.get("properties", {})
     fixed = dict(args)
     for param in props:
@@ -76,6 +103,8 @@ def normalize_args(tool: "Tool", args: dict) -> dict:
             if alias in fixed and alias not in props:
                 fixed[param] = fixed.pop(alias)
                 break
+    if tool.name == "write_file" and isinstance(fixed.get("content"), str):
+        fixed["content"] = clean_file_content(str(fixed.get("path", "")), fixed["content"])
     return fixed
 
 
