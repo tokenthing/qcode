@@ -16,18 +16,20 @@ from .config import Config
 from .context import estimate_tokens, transcript, truncate
 from .memory import load_memory
 from .permissions import Permissions
-from .prompts import COMPACT_PROMPT, CONTINUE_NUDGE, build_system_prompt
+from .prompts import COMPACT_PROMPT, build_nudge, build_system_prompt
 from .toolparse import broken_call_error, extract_text_tool_calls
 from .tools import ALL_TOOLS, WEB_TOOLS, ToolContext, ToolError, normalize_args
 
 DENIED = "The user denied this tool call. Stop and wait for their instructions."
 MAX_REPAIRS = 2  # times per turn we ask the model to rewrite a tool call we couldn't read
+MAX_NUDGES = 2   # times per turn we remind it to actually make the call it talked about
 FILE_TOOLS = ("write_file", "edit_file")
 
 # "I'll write this to the file.", "Here's the command:" … announced but not done.
 _INTENT_RE = re.compile(
-    r"\b(?:i'll|i will|i'm going to|let me|now i'll|next,? i'll|i'll now)\b.*\b(?:write|save|create|update|apply|add|"
-    r"edit|change|run|read|make|fix|implement|modify|replace|polish|style)\b",
+    r"\b(?:i'll|i will|i'm going to|let me(?!\s+know)|let's|let us|now i'll|next,? i'll|i'll now)\b.*\b(?:write|save|create|update|apply|add|"
+    r"edit|change|run|read|make|fix|implement|modify|replace|polish|style|fetch|check|search|look|get|use|call|try|open|"
+    r"download|query|find)\b",
     re.I,
 )
 
@@ -48,21 +50,65 @@ def wants_web(text: str) -> bool:
 
 
 WEB_NOTE = (
-    "[Web access is on for this message because the user asked about something online. Use web_search, then call "
+    "[Web access is on for this message (the user asked about something online, or this follows up on it). Use web_search, then call "
     "web_fetch yourself on the most relevant result (don't ask the user which one to open), or use weather for weather "
-    "questions. Answer the question directly and say which sources you used.{location}]\n\n"
+    "questions. If this is a follow-up (e.g. 'what about <another place>?'), look the new thing up the same way as "
+    "before; unfamiliar names may be misspelled places, so search for the spelling rather than guessing. If you end up using "
+    "a different name than the user typed, say so (\"I assumed you meant X\"). Answer directly and say which sources you "
+    "used.{location}]\n\n"
 )
+
+
+_PERMISSION_RE = re.compile(
+    r"\b(?:please\s+confirm|confirm\s+(?:if|whether|that)|shall\s+i\s+(?:proceed|go\s+ahead|continue)|"
+    r"should\s+i\s+(?:proceed|go\s+ahead)|(?:would|do)\s+you\s+(?:like|want)\s+me\s+to\s+(?:proceed|go\s+ahead|continue)|"
+    r"let\s+me\s+know\s+if\s+(?:you'd|you\s+would)\s+like\s+me\s+to\s+proceed)\b",
+    re.I,
+)
+_CLAIM_RE = re.compile(r"\bI(?:'ve|\s+have)\s+(?:now\s+)?(?:added|updated|created|fixed|changed|modified|written|saved|renamed|replaced|edited)\b", re.I)
+
+
+_NO_ACCESS_RE = re.compile(
+    r"\b(?:(?:do\s*n[o']?t|does\s*n[o']?t)\s+have\s+(?:any\s+)?(?:specific\s+|real-time\s+|current\s+|up-to-date\s+|live\s+)?"
+    r"(?:information|data|access|details)|(?:can(?:no|')t|unable\s+to|not\s+able\s+to)\s+(?:access|browse|search|look\s+up|find|check)|"
+    r"no\s+(?:real-time|internet|web|online)\s+access|without\s+(?:internet|web)\s+access)",
+    re.I,
+)
+
+
+def _mentions_tool(body: str, name: str) -> bool:
+    """Tool names like web_fetch are unambiguous; plain words like "weather" only count when written as a call."""
+    if "_" in name:
+        return re.search(rf"\b{re.escape(name)}\b", body) is not None
+    n = re.escape(name)
+    return re.search(rf"`{n}`|\b{n}\s*\(|\b(?:use|call|run|using|calling)\s+(?:the\s+)?{n}\b|\b{n}\s+(?:tool|call)\b", body, re.I) is not None
+
+
+def stall_reason(text: str, tool_names, acted: bool, web_turn: bool = False) -> tuple[str, str] | None:
+    """Why a reply without a tool call looks like the model meant to act: (reason, tool it named), or None."""
+    body = (text or "").strip()
+    if not body:
+        return None
+    named = next((t for t in tool_names if _mentions_tool(body, t)), "")
+    if named:
+        return "named", named
+    if web_turn and not acted and _NO_ACCESS_RE.search(body):
+        return "no_access", "web_search"
+    if _PERMISSION_RE.search(body):
+        return "permission", ""
+    if not acted and _CLAIM_RE.search(body):
+        return "claimed", ""
+    prose = re.sub(r"```.*?(?:```|\Z)", "", body, flags=re.S)  # judge the last sentence, not a trailing code block
+    lines = [l.strip() for l in prose.splitlines() if l.strip()]
+    last = lines[-1] if lines else ""
+    if last and "?" not in last and (last.endswith(":") or _INTENT_RE.search(last)):
+        return "announced", ""
+    return None
 
 
 def looks_unfinished(text: str) -> bool:
     """True when a reply ends by announcing an action (and didn't ask the user anything)."""
-    lines = [l.strip() for l in (text or "").strip().splitlines() if l.strip() and not l.strip().startswith("```")]
-    if not lines:
-        return False
-    last = lines[-1]
-    if "?" in last:
-        return False
-    return last.endswith(":") or bool(_INTENT_RE.search(last))
+    return stall_reason(text, (), acted=True) is not None and stall_reason(text, (), acted=True)[0] == "announced"
 
 
 @dataclass
@@ -97,6 +143,8 @@ class Agent:
         self.ui = ui
         self.tools = ALL_TOOLS        # always available
         self.turn_tools = ALL_TOOLS   # what this turn offers (adds WEB_TOOLS when the user asked for the web)
+        self.web_followup = False     # the last turn used a web tool, so a follow-up question keeps web access
+        self._web_used = False
         self.session_path = session_path or sessions.new_session_path()
         self.messages: list[dict] = [self._system_message()]
         self._ctx_cache: dict[tuple[str, str], int] = {}
@@ -177,6 +225,9 @@ class Agent:
         if user_text.startswith("[Web access is on") and "]\n\n" in user_text:  # e.g. /retry of a web turn
             user_text = user_text.split("]\n\n", 1)[1]
         use_web = self.web_enabled_for(label or user_text, web)
+        if not use_web and self.web_followup and web is None and getattr(self.config, "web_access", "when-asked") != "off":
+            use_web = True  # "what about Phatthalung?" right after a weather question
+        self._web_used = False
         self.turn_tools = {**self.tools, **WEB_TOOLS} if use_web else self.tools
         self.ctx.location = self.config.location
         if use_web:
@@ -203,6 +254,7 @@ class Agent:
             if self._checkpoint and self._checkpoint.files:
                 self.checkpoints.append(self._checkpoint)
             self._checkpoint = None
+            self.web_followup = self._web_used
             self.save()
         stats.seconds = time.monotonic() - started
         stats.ctx_used, stats.ctx_limit = self.tokens_used(), self.num_ctx
@@ -210,7 +262,7 @@ class Agent:
 
     def _loop(self, stats: TurnStats) -> None:
         schemas = [t.schema() for t in self.turn_tools.values()]
-        repairs = nudged = 0
+        repairs = nudges = 0
         extra = {} if self.config.temperature_value is None else {"temperature": self.config.temperature_value}
         for _ in range(self.config.max_steps):
             self.maybe_compact()
@@ -247,11 +299,12 @@ class Agent:
                         "with quotes and newlines inside strings escaped (\\n, \\\")."
                     )})
                     continue
-                if self.config.auto_continue and not nudged and looks_unfinished(content):
-                    nudged = 1
+                stall = stall_reason(content, list(self.turn_tools), acted=stats.tools > 0, web_turn="web_search" in self.turn_tools)
+                if self.config.auto_continue and stall and not problem and nudges < MAX_NUDGES:
+                    nudges += 1
                     stats.nudges += 1
-                    self.ui.info("The model said it would do something but didn't; nudging it to continue…")
-                    self.messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                    self.ui.info("The model talked about doing something but didn't do it; nudging it to continue…")
+                    self.messages.append({"role": "user", "content": build_nudge(*stall)})
                     continue
                 return
 
@@ -282,6 +335,8 @@ class Agent:
             return f"Error: invalid arguments JSON ({e})", False
         args = normalize_args(tool, args)
 
+        if call.name in WEB_TOOLS:
+            self._web_used = True
         self.ui.tool_call(call.name, args)
         blocked = None if tool.read_only else self.permissions.blocked(call.name)
         if blocked:

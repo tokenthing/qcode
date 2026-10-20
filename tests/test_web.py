@@ -108,3 +108,100 @@ def test_html_to_text_drops_scripts_and_menus():
 def test_fetch_rejects_non_http(root):
     with pytest.raises(ToolError, match="http"):
         web.web_fetch(ToolContext(root), {"url": "file:///etc/passwd"})
+
+
+@pytest.mark.parametrize("text,reason", [
+    ("I'll use web_fetch on the first result, which provides a detailed forecast:", "named"),
+    ("Here is the web_search call to find the weather.\n\nPlease confirm if you'd like me to proceed with this action.", "named"),
+    ("Please confirm if you'd like me to proceed with this action.", "permission"),
+    ("I've added the multiply function to utils.py.", "claimed"),
+    ("Let's start with the search:", "announced"),
+    ("It's 29°C and overcast in Bangkok.", None),
+    ("Would you like hourly forecasts?", None),
+])
+def test_stall_reasons(text, reason):
+    from qcode.agent import stall_reason
+    got = stall_reason(text, ["web_search", "web_fetch", "weather", "write_file"], acted=False)
+    assert (got[0] if got else None) == reason
+
+
+def test_claim_after_real_work_is_not_a_stall():
+    from qcode.agent import stall_reason
+    assert stall_reason("I've added the function.", ["write_file"], acted=True) is None
+
+
+def test_follow_up_question_keeps_web_access(root):
+    agent, *_ = make_agent(root, [])
+    agent.client = RecordingClient([
+        ("", [call("weather", location="Krabi")]), ("Krabi: 30°C", []),   # web turn that used a tool
+        ("Phatthalung: 28°C", []),                                       # "what about pattalung" → still offered
+        ("ok", []),                                                      # no web tool used last time → off again
+    ])
+    agent.ctx.location = ""
+    import qcode.tools.web as w
+    w_weather = w.weather
+    agent.turn_tools = {}
+    from qcode.tools import WEB_TOOLS
+    WEB_TOOLS["weather"].run = lambda ctx, args: "Weather for Krabi\nNow: 30°C"
+    try:
+        agent.run("weather today in krabi?")
+        agent.run("what about pattalung")
+        assert "weather" in agent.client.offered
+        agent.run("now add a test file")
+        assert "weather" not in agent.client.offered
+    finally:
+        WEB_TOOLS["weather"].run = w_weather
+
+
+def test_misspelled_place_falls_back_to_openstreetmap(monkeypatch, root):
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "geocoding" in url:
+            return httpx.Response(200, json={}, request=httpx.Request("GET", url))
+        if "nominatim" in url:
+            return httpx.Response(200, json=[{"name": "Phatthalung", "lat": "7.6", "lon": "100.07",
+                                              "address": {"state": "Phatthalung", "country": "Thailand"}}], request=httpx.Request("GET", url))
+        raise AssertionError(url)
+
+    monkeypatch.setattr(web.httpx, "get", fake_get)
+    spot = web._geocode("pattalung")
+    assert spot["name"] == "Phatthalung" and spot["country"] == "Thailand"
+
+
+def test_unknown_place_tells_the_model_to_search_for_the_spelling(monkeypatch):
+    monkeypatch.setattr(web.httpx, "get", lambda url, **kw: httpx.Response(200, json={} if "geocoding" in url else [], request=httpx.Request("GET", url)))
+    with pytest.raises(ToolError, match="web_search for 'Pattarung weather'"):
+        web._geocode("Pattarung")
+
+
+@pytest.mark.parametrize("text,web_turn,reason", [
+    ("Based on the weather forecast for Nakhon Si Thammarat: showers, 26°C.", True, None),   # 'weather' as a word
+    ("I'll call `weather` for Krabi next.", True, "named"),
+    ("I'll use the weather tool for that.", True, "named"),
+    ("I don't have specific information available on 'pattarung'.", True, "no_access"),
+    ("I don't have specific information available on 'pattarung'.", False, None),           # no web tools: honest
+    ("I can't access real-time data.", True, "no_access"),
+])
+def test_stall_reasons_with_plain_word_tools(text, web_turn, reason):
+    from qcode.agent import stall_reason
+    got = stall_reason(text, ["web_search", "web_fetch", "weather", "grep"], acted=False, web_turn=web_turn)
+    assert (got[0] if got else None) == reason
+
+
+@pytest.mark.parametrize("text", [
+    "Let's use the first result from AccuWeather:\n\n```\n\"https://www.accuweather.com/en/th/x\"\n```",
+    "The correct spelling appears to be Phatthalung. I'll fetch the weather for it now.",
+    "Let me check the forecast for Phatthalung.",
+])
+def test_announcing_before_a_code_block_or_with_new_verbs_is_a_stall(text):
+    from qcode.agent import stall_reason
+    assert stall_reason(text, ["web_search", "web_fetch", "weather"], acted=True, web_turn=True)[0] == "announced"
+
+
+@pytest.mark.parametrize("text", [
+    "Done! Let me know if you want me to fix anything else.",
+    "It's 26°C with showers in Phatthalung. Let me know if you'd like to check another city.",
+    "I'll be happy to help with anything else.",
+])
+def test_normal_closing_lines_are_not_stalls(text):
+    from qcode.agent import stall_reason
+    assert stall_reason(text, ["web_search", "web_fetch", "weather"], acted=True, web_turn=True) is None

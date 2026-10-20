@@ -258,9 +258,9 @@ def test_nudge_once_when_model_stalls(root):
     ])
     agent.run("polish p.html")
     assert (root / "p.html").read_text() == "<p>hi</p>"
-    agent2, client2, _ = make_agent(root, [("I'll do it now:", []), ("I'll do it now:", []), ("unused", [])])
+    agent2, client2, _ = make_agent(root, [("I'll do it now:", [])] * 3 + [("unused", [])])
     agent2.run("go")
-    assert len(client2.responses) == 1  # nudged once, then gave up
+    assert len(client2.responses) == 1  # nudged twice (MAX_NUDGES), then gave up
     agent3, client3, _ = make_agent(root, [("I'll do it now:", []), ("unused", [])])
     agent3.config.auto_continue = False
     agent3.run("go")

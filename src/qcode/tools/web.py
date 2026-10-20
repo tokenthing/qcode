@@ -181,9 +181,25 @@ def _geocode(place: str) -> dict:
     if region:
         wanted = region.lower()
         hits = [h for h in hits if wanted in " ".join(str(h.get(k, "")) for k in ("country", "country_code", "admin1")).lower()] or hits
-    if not hits:
-        raise ToolError(f"couldn't find a place called {place!r}; try a nearby city name")
-    return hits[0]
+    if hits:
+        return hits[0]
+    # OpenStreetMap knows many alternative spellings (e.g. Thai romanizations) that Open-Meteo doesn't.
+    try:
+        r = httpx.get("https://nominatim.openstreetmap.org/search",
+                      params={"q": place, "format": "json", "limit": 1, "addressdetails": 1, "accept-language": "en",
+                              "featureType": "settlement"},  # towns, cities and provinces, not roads or shops
+                      headers={"User-Agent": "qcode (https://github.com/tokenthing/qcode)"}, timeout=TIMEOUT)
+        osm = r.json() if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError):
+        osm = []
+    if osm:
+        addr = osm[0].get("address", {})
+        return {"name": osm[0].get("name") or place, "admin1": addr.get("state", ""), "country": addr.get("country", ""),
+                "latitude": float(osm[0]["lat"]), "longitude": float(osm[0]["lon"])}
+    raise ToolError(
+        f"couldn't find a place called {place!r}. It may be spelled differently (many places have several spellings). "
+        f"Call web_search for '{place} weather' to find the usual spelling, then call weather again with it."
+    )
 
 
 def weather(ctx: ToolContext, args: dict) -> str:
