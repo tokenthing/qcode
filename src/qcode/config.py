@@ -27,7 +27,8 @@ DEFAULT_TOML = """\
 # /servers, /server <name>, /add_api_server and /remove_api_server. (There is no default address.)
 api_key = "ollama"            # Ollama ignores it, but the OpenAI client requires one
 model = "qcoder-14b"          # default model for new sessions
-temperature = "default"       # 0 = focused … 2 = creative, or "default" for the model's own
+temperature = 0.8             # 0 = focused … 2 = creative, or "default" for the model's own
+max_tokens = 4096             # maximum completion tokens the model can generate per reply
 thinking = "default"          # default | off: turn off the hidden reasoning of thinking models like qwen3 (much faster)
 tool_examples = false         # add a worked example of correct tool use to the instructions (helps small models)
 
@@ -38,6 +39,7 @@ default_mode = "ask"          # ask | auto-edit | auto | plan   (Shift+Tab switc
                               #   auto:      approve everything (careful)
                               #   plan:      read-only; the model can look around and plan, not change anything
 auto_continue = true          # nudge the model once when it says "I'll do X" but doesn't do it
+compress_input = true         # compress older tool outputs & context to reduce input tokens
 read_before_write = true      # refuse to overwrite a file the model hasn't read this session
 max_steps = 25                # max model<->tool round trips per prompt
 tool_output_limit = 4000      # characters of tool output sent back to the model
@@ -95,10 +97,12 @@ SETTINGS: list[Setting] = [
             choices=PERMISSION_MODES),
     Setting("model", "str", "Default model", "model used when qcode starts (use /model to switch right now)"),
     Setting("temperature", "temperature", "Temperature", "0 = focused and repeatable … 2 = creative; 'default' uses the model's own", lo=0, hi=2),
+    Setting("max_tokens", "int", "Max generation tokens", "max tokens the model can generate per reply", lo=256, hi=32768),
     Setting("thinking", "choice", "Thinking", "off: skip the hidden reasoning of models like qwen3 (much faster); default: the model decides",
             choices=("default", "off")),
     Setting("tool_examples", "bool", "Tool-use example", "show the model a worked example of correct tool calls (helps small models)"),
     Setting("auto_continue", "bool", "Auto-continue", "nudge the model once when it says it'll do something but doesn't call a tool"),
+    Setting("compress_input", "bool", "Compress input tokens", "compress older tool outputs and context to reduce input tokens sent to the model"),
     Setting("read_before_write", "bool", "Read before overwrite", "refuse to overwrite an existing file the model hasn't read this session"),
     Setting("compact_at", "int", "Compact history at (%)", "summarize older messages when the context window is this full", lo=50, hi=95),
     Setting("max_steps", "int", "Max steps per prompt", "how many tool round trips the model may take for one request", lo=1, hi=200),
@@ -117,11 +121,13 @@ class Config:
     base_url: str = ""  # legacy: older configs named the first server here; it's moved into servers.json
     api_key: str = "ollama"
     model: str = "qcoder-14b"
-    temperature: object = "default"  # "default" or a float
+    temperature: object = 0.8  # float or "default"
+    max_tokens: int = 4096
     thinking: str = "default"        # default | off
     tool_examples: bool = False
     default_mode: str = "ask"
     auto_continue: bool = True
+    compress_input: bool = True
     read_before_write: bool = True
     max_steps: int = 25
     tool_output_limit: int = 4000

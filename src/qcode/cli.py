@@ -19,19 +19,20 @@ from .ui import TerminalUI
 app = typer.Typer(add_completion=False, help="A terminal coding agent for your self-hosted models.")
 
 
-def pick_server(config, server_name: Optional[str], base_url: Optional[str]) -> tuple[ServerStore, Server]:
+def pick_server(config, server_name: Optional[str], base_url: Optional[str], api_key: Optional[str] = None) -> tuple[ServerStore, Server]:
     # Older configs had base_url; it becomes the first saved server. New installs start with none.
-    seed = Server("home", normalize_url(config.base_url), config.api_key) if config.base_url else None
+    key = api_key or config.api_key or "ollama"
+    seed = Server("home", normalize_url(config.base_url), key) if config.base_url else None
     store = ServerStore(seed=seed)
     if base_url:
-        return store, Server("custom", normalize_url(base_url), config.api_key)
+        return store, Server("custom", normalize_url(base_url), key)
     if not store.servers:
         from .onboarding import can_ask, first_run_setup
 
         if not can_ask():
             raise typer.BadParameter("no model server saved yet. Run `qcode` once in a terminal to set one up, "
                                      "or pass --base-url <ip>.", param_hint="server")
-        server = first_run_setup(store, config.api_key)
+        server = first_run_setup(store, key)
         if server is None:
             from . import ui
 
@@ -53,6 +54,10 @@ def main(
     model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use (overrides config)."),
     server_name: Optional[str] = typer.Option(None, "-s", "--server", help="Saved server to use (see /servers)."),
     base_url: Optional[str] = typer.Option(None, "--base-url", help="One-off server address, e.g. 192.168.1.50 or http://host:11434/v1"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "--password", help="API key or password for the server."),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens", help="Max completion tokens (default from config: 4096)."),
+    temperature: Optional[str] = typer.Option(None, "--temperature", help="Sampling temperature, e.g. 0.8 or 'default'."),
+    compress_input: Optional[bool] = typer.Option(None, "--compress-input/--no-compress-input", help="Compress input tokens to fit smaller context."),
     resume: bool = typer.Option(False, "-r", "--resume", help="Resume the latest session for this folder."),
     mode: Optional[str] = typer.Option(None, "--mode", help="Permission mode: ask, auto-edit, auto or plan (default from config)."),
     yolo: bool = typer.Option(False, "--yolo", help="Same as --mode auto: approve every tool call without asking."),
@@ -63,7 +68,14 @@ def main(
     config = load_config()
     if model:
         config.model = model
-    store, server = pick_server(config, server_name, base_url)
+    if max_tokens is not None:
+        config.max_tokens = max_tokens
+    if temperature is not None:
+        from .config import parse_setting
+        config.temperature = parse_setting("temperature", temperature)
+    if compress_input is not None:
+        config.compress_input = compress_input
+    store, server = pick_server(config, server_name, base_url, api_key)
 
     root = cwd.resolve()
     ui = TerminalUI()
@@ -208,6 +220,15 @@ def bench(
     runner.print_scoreboard(runs, picked, repeat)
     path = runner.save_results(runs, server.base_url, picked, repeat, settings)
     ui.console.print(Text(f"\n  Saved to {path} · qcode bench --history to compare runs", style=ui.MUTED))
+
+
+@app.command("install-compressor")
+def install_compressor_cli() -> None:
+    """Install the optional neural input compressor (llmlingua) into qcode's environment."""
+    from .compressor import install_compressor
+    ok = install_compressor()
+    if not ok:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -17,16 +17,29 @@ def answers(monkeypatch):
 
 def test_first_run_saves_the_server(answers, monkeypatch, tmp_path):
     monkeypatch.setattr(onboarding, "ping", lambda server, timeout: Ping(True, 12, ["qcoder-14b:latest"]))
-    answers["text"] += ["192.168.1.50", "gpu"]
+    answers["text"] += ["192.168.1.50", "", "gpu"]
     store = ServerStore(tmp_path / "servers.json")
     server = onboarding.first_run_setup(store)
     assert server.base_url == "http://192.168.1.50:11434/v1" and server.name == "gpu"
+    assert server.api_key == "ollama"
     assert ServerStore(tmp_path / "servers.json").current.name == "gpu"  # persisted
+
+
+def test_first_run_with_password(answers, monkeypatch, tmp_path):
+    recorded = []
+    monkeypatch.setattr(onboarding, "ping", lambda server, timeout: recorded.append(server) or Ping(True, 12, ["qcoder-14b:latest"]))
+    answers["text"] += ["192.168.1.50", "secret-pass", "gpu"]
+    store = ServerStore(tmp_path / "servers.json")
+    server = onboarding.first_run_setup(store)
+    assert server.base_url == "http://192.168.1.50:11434/v1" and server.name == "gpu"
+    assert server.api_key == "secret-pass"
+    assert recorded[0].api_key == "secret-pass"
+    assert ServerStore(tmp_path / "servers.json").current.api_key == "secret-pass"
 
 
 def test_unreachable_server_can_be_retried_or_saved_anyway(answers, monkeypatch, tmp_path):
     monkeypatch.setattr(onboarding, "ping", lambda server, timeout: Ping(False, error="timed out"))
-    answers["text"] += ["not a url!!", "10.0.0.9", "10.0.0.7", "home"]
+    answers["text"] += ["not a url!!", "10.0.0.9", "", "10.0.0.7", "", "home"]
     answers["select"] += ["retry", "save"]
     server = onboarding.first_run_setup(ServerStore(tmp_path / "servers.json"))
     assert server.base_url == "http://10.0.0.7:11434/v1"

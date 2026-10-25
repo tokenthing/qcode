@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "installer" / "install_qcode.py"
 DEFAULTS = ROOT / "installer" / "defaults.json"
 OUT = ROOT / "dist" / "install_qcode.py"
-DEFAULT_KEYS = {"server": "DEFAULT_SERVER", "server_name": "DEFAULT_SERVER_NAME", "zerotier_network": "DEFAULT_ZT_NETWORK"}
+DEFAULT_KEYS = {"server": "DEFAULT_SERVER", "server_name": "DEFAULT_SERVER_NAME", "zerotier_network": "DEFAULT_ZT_NETWORK", "api_key": "DEFAULT_API_KEY"}
 
 
 def source_files():

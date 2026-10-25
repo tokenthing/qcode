@@ -282,16 +282,50 @@ def test_temperature_is_passed_only_when_set(root):
 
     class Client:
         def stream_chat(self, model, messages, tools, on_text, **kw):
+            seen.clear()
             seen.update(kw)
             return "ok", []
 
-    agent, *_ = make_agent(root, [])
+    agent, *_ = make_agent(root, [], temperature="default", max_tokens=None)
     agent.client = Client()
     agent.run("hi")
     assert seen == {}
-    agent.config.temperature = 0.3
+    agent.config.temperature = 0.8
     agent.run("hi")
-    assert seen == {"temperature": 0.3}
+    assert seen == {"temperature": 0.8}
+
+
+def test_max_tokens_and_input_compression(root):
+    seen = {}
+
+    class Client:
+        def stream_chat(self, model, messages, tools, on_text, **kw):
+            seen.clear()
+            seen.update(kw)
+            return "ok", []
+
+    agent, *_ = make_agent(root, [], max_tokens=4096, temperature="default")
+    agent.client = Client()
+    agent.run("hi")
+    assert seen == {"max_tokens": 4096}
+
+    from qcode.compressor import compress_messages, compress_tool_content
+    long_output = "line1\n" + ("middle\n" * 50) + "end\n"
+    compressed = compress_tool_content(long_output, max_chars=50)
+    assert "omitted" in compressed
+
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "1", "name": "read_file", "content": long_output},
+        {"role": "user", "content": "turn 2"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "2", "type": "function", "function": {"name": "edit_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "2", "name": "edit_file", "content": "short"},
+    ]
+    comp = compress_messages(messages, max_tool_chars=50, keep_recent_tools=1)
+    assert "omitted" in comp[3]["content"]
+    assert comp[6]["content"] == "short"
 
 
 def test_thinking_off_and_examples_reach_the_model(root):

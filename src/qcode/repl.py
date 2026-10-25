@@ -53,6 +53,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("/retry", "drop the last answer and ask again"),
         ("/undo", "revert the file changes from qcode's last turn"),
         ("/compact", "summarize the history to free up context"),
+        ("/compress", "input token compression status, /compress run, or /compress install"),
         ("/context", "what's using the context · /context set <tokens|16k|max> to resize it"),
         ("/web", "ask with web access on, e.g. /web latest Python version"),
         ("/copy", "copy the last reply to the clipboard"),
@@ -94,6 +95,7 @@ SUBCOMMANDS = {
     "/config": ["set", "edit", "path"],
     "/permissions": ["reset", "remove"],
     "/context": ["set"],
+    "/compress": ["run", "install", "on", "off"],
     "/mode": list(PERMISSION_MODES),
 }
 
@@ -261,6 +263,7 @@ class Repl:
             "/retry": self.cmd_retry,
             "/undo": self.cmd_undo,
             "/compact": self.cmd_compact,
+            "/compress": self.cmd_compress,
             "/context": self.cmd_context,
             "/copy": self.cmd_copy,
             "/export": self.cmd_export,
@@ -545,6 +548,33 @@ class Repl:
         self.agent.save()
         self.ui.ok(f"Compacted ~{before:,} → ~{self.agent.tokens_used():,} tokens.")
 
+    def cmd_compress(self, arg: str) -> None:
+        sub = arg.strip().lower()
+        from .compressor import compress_messages, compression_ratio, install_compressor, is_llmlingua_available
+        if sub in ("install", "setup"):
+            install_compressor(self.ui)
+            return
+        if sub in ("on", "true", "enable", "1"):
+            self.agent.config.compress_input = True
+            set_config_value("compress_input", True)
+            self.ui.ok("Input token compression enabled.")
+            return
+        if sub in ("off", "false", "disable", "0"):
+            self.agent.config.compress_input = False
+            set_config_value("compress_input", False)
+            self.ui.warn("Input token compression disabled.")
+            return
+        if sub in ("run", "now"):
+            orig, comp, pct = compression_ratio(self.agent.messages, self.agent.prepared_messages())
+            self.ui.ok(f"Compressed input tokens: ~{orig:,} → ~{comp:,} ({pct:.1f}% saved).")
+            return
+        status = "enabled" if self.agent.config.compress_input else "disabled"
+        orig, comp, pct = compression_ratio(self.agent.messages, self.agent.prepared_messages())
+        neural = "installed" if is_llmlingua_available() else "not installed (type /compress install to add)"
+        self.ui.info(f"Input compression: {status} · current reduction: ~{orig:,} → ~{comp:,} tokens ({pct:.1f}% saved).")
+        self.ui.info(f"Neural compressor (LLMLingua): {neural}.")
+        self.ui.info("Commands: /compress run · /compress install · /compress on|off")
+
     def cmd_context(self, arg: str) -> None:
         parts = arg.split()
         if not parts:
@@ -737,7 +767,13 @@ class Repl:
             return
         name = parts[0] if parts else self._ask_text("Name (e.g. home, laptop, gpu-box)")
         address = parts[1] if len(parts) > 1 else self._ask_text("Address (IP, host:port or full URL)")
-        api_key = parts[2] if len(parts) > 2 else "ollama"
+        if len(parts) > 2:
+            api_key = parts[2]
+        elif len(parts) < 2:
+            key_input = self._ask_text("Password or API key (optional, Enter for none)")
+            api_key = key_input.strip() if key_input else "ollama"
+        else:
+            api_key = "ollama"
         if not name or not address:
             self.ui.info("Cancelled.")
             return

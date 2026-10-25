@@ -8,6 +8,7 @@ Options:
     --server ADDR     model server address (IP, host:port or URL)
     --name NAME       name for that server in qcode (default: home)
     --model NAME      default model
+    --password KEY    API key or password for the server (default: ollama)
     --yes             accept all defaults, no questions
     --reconfigure     ask for server/model again even if qcode is already configured
     --uninstall       remove qcode (keeps your settings and sessions)
@@ -53,6 +54,7 @@ PAYLOAD = None
 DEFAULT_SERVER = ""
 DEFAULT_SERVER_NAME = "home"
 DEFAULT_ZT_NETWORK = ""
+DEFAULT_API_KEY = ""
 PREFERRED_MODELS = ["qcoder-14b", "qcoder-7b", "qwen2.5-coder:14b", "qwen2.5-coder:7b"]
 
 IS_WIN = os.name == "nt"
@@ -407,9 +409,9 @@ def normalize(address):
     return venv_python("import sys; from qcode.servers import normalize_url; print(normalize_url(sys.argv[1]))", address)
 
 
-def fetch_models(url, timeout=4):
+def fetch_models(url, api_key="ollama", timeout=4):
     try:
-        with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/models", headers={"Authorization": "Bearer ollama"}), timeout=timeout) as r:
+        with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/models", headers={"Authorization": "Bearer %s" % api_key}), timeout=timeout) as r:
             data = json.loads(r.read().decode())
         return sorted(m["id"].replace(":latest", "") for m in data.get("data", []))
     except (urllib.error.URLError, OSError, ValueError, KeyError):
@@ -480,6 +482,10 @@ def configure():
     if not address:
         info("No server address given; qcode will ask for it the first time you start it.")
         return None
+    api_key = getattr(ARGS, "api_key", None)
+    if api_key is None:
+        api_key = ask("Password or API key (optional, press Enter for none)", DEFAULT_API_KEY) if not ARGS.yes else DEFAULT_API_KEY
+    api_key = api_key.strip() if api_key else "ollama"
     while True:
         try:
             url = normalize(address)
@@ -489,10 +495,10 @@ def configure():
             warn(str(e) if address else "Please enter the server address.")
             address = ask("Model server address", DEFAULT_SERVER)
             continue
-        models = fetch_models(url)
+        models = fetch_models(url, api_key=api_key)
         if models is None and not ARGS.yes and offer_zerotier(url):
             for _ in range(6):
-                models = fetch_models(url)
+                models = fetch_models(url, api_key=api_key)
                 if models is not None:
                     break
                 info("still waiting for the network…")
@@ -525,20 +531,22 @@ def configure():
 import re, sys
 from qcode import config
 from qcode.servers import Server, ServerStore
-url, model, name = sys.argv[1:4]
+url, model, name, key = sys.argv[1:5]
 text = config.CONFIG_FILE.read_text(encoding="utf-8") if config.CONFIG_FILE.exists() else config.DEFAULT_TOML
 text = re.sub(r'(?m)^base_url = .*$', 'base_url = "%s"' % url, text)
 text = re.sub(r'(?m)^model = .*$', 'model = "%s"' % model, text)
+text = re.sub(r'(?m)^api_key = .*$', 'api_key = "%s"' % key, text)
 config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 config.CONFIG_FILE.write_text(text, encoding="utf-8")
-store = ServerStore(seed=Server(name, url))
-if store.get(name) is None or store.get(name).base_url != url:
-    store.add(name, url)
+store = ServerStore(seed=Server(name, url, key))
+if store.get(name) is None or store.get(name).base_url != url or store.get(name).api_key != key:
+    store.add(name, url, key)
 store.use(name)
 """,
         url,
         model,
         name,
+        api_key,
     )
     ok("Saved settings: server %s → %s, model %s" % (name, url, model))
     return url
@@ -579,6 +587,7 @@ def main():
     parser.add_argument("--server", help="model server address (IP, host:port or URL)")
     parser.add_argument("--name", help="name for the server (default: home)")
     parser.add_argument("--model", help="default model")
+    parser.add_argument("--key", "--api-key", "--password", dest="api_key", help="API key or password for the server")
     parser.add_argument("--yes", "-y", action="store_true", help="accept all defaults, no questions")
     parser.add_argument("--reconfigure", action="store_true", help="ask for server and model again")
     parser.add_argument("--uninstall", action="store_true", help="remove qcode")

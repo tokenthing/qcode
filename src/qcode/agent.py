@@ -249,8 +249,15 @@ class Agent:
     def num_ctx(self) -> int:
         return self.context_for(self.model)
 
-    def tokens_used(self) -> int:
-        return estimate_tokens(self.messages) + estimate_tokens([t.schema() for t in self.tools.values()])
+    def tokens_used(self, compressed: bool = False) -> int:
+        msgs = self.prepared_messages() if compressed and getattr(self.config, "compress_input", True) else self.messages
+        return estimate_tokens(msgs) + estimate_tokens([t.schema() for t in self.tools.values()])
+
+    def prepared_messages(self) -> list[dict]:
+        if getattr(self.config, "compress_input", True):
+            from .compressor import compress_messages
+            return compress_messages(self.messages)
+        return self.messages
 
     # --- main loop ----------------------------------------------------------------
     def web_enabled_for(self, text: str, force: bool | None = None) -> bool:
@@ -299,22 +306,27 @@ class Agent:
             self.web_followup = self._web_used
             self.save()
         stats.seconds = time.monotonic() - started
-        stats.ctx_used, stats.ctx_limit = self.tokens_used(), self.num_ctx
+        stats.ctx_used, stats.ctx_limit = self.tokens_used(compressed=True), self.num_ctx
         self.ui.turn_done(stats)
 
     def _loop(self, stats: TurnStats) -> None:
         schemas = [t.schema() for t in self.turn_tools.values()]
         repairs = nudges = 0
         self._failed_calls: set[tuple[str, str]] = set()
-        extra = {} if self.config.temperature_value is None else {"temperature": self.config.temperature_value}
+        extra = {}
+        if self.config.temperature_value is not None:
+            extra["temperature"] = self.config.temperature_value
+        if getattr(self.config, "max_tokens", None) is not None:
+            extra["max_tokens"] = self.config.max_tokens
         if getattr(self.config, "reasoning_effort", None):
             extra["reasoning_effort"] = self.config.reasoning_effort
         for _ in range(self.config.max_steps):
             self.maybe_compact()
+            messages = self.prepared_messages()
             self.ui.stream_start()
             gen_start = time.monotonic()
             try:
-                content, calls = self.client.stream_chat(self.model, self.messages, schemas, self.ui.stream_text, **extra)
+                content, calls = self.client.stream_chat(self.model, messages, schemas, self.ui.stream_text, **extra)
             finally:
                 self.ui.stream_end()
             stats.gen_seconds += time.monotonic() - gen_start

@@ -16,14 +16,14 @@ class FakeClient:
         self.summary = summary
         self.seen: list[list[dict]] = []
 
-    def stream_chat(self, model, messages, tools, on_text):
+    def stream_chat(self, model, messages, tools, on_text, **extra):
         self.seen.append([dict(m) for m in messages])
         content, calls = self.responses.pop(0)
         if content:
             on_text(content)
         return content, calls
 
-    def complete(self, model, messages):
+    def complete(self, model, messages, **extra):
         return self.summary
 
 

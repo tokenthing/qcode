@@ -30,22 +30,32 @@ def first_run_setup(store: ServerStore, api_key: str = "ollama") -> Server | Non
         except ValueError as e:
             ui.console.print(Text(f"  ✗ {e}", style=ui.ERR))
             continue
+        password = ui.text_input("Password or API key (optional, press Enter for none)", "")
+        if password is None:
+            return None
+        key = password.strip() if password.strip() else api_key
         with ui.console.status(Text(f"Checking {url}…", style=ui.MUTED), spinner="dots", spinner_style=ui.ACCENT):
-            status = ping(Server("new", url, api_key), timeout=5)
+            status = ping(Server("new", url, key), timeout=5)
         if status.ok:
             models = ", ".join(m.removesuffix(":latest") for m in status.models[:6]) + ("…" if len(status.models) > 6 else "")
             ui.console.print(Text.assemble(("  ✓ ", ui.OK), (f"Connected · {status.latency_ms}ms · {len(status.models)} models", ""),
                                            (f": {models}" if models else "", ui.MUTED)))
         else:
             ui.console.print(Text(f"  ✗ {url} isn't responding ({status.error}).", style=ui.ERR))
-            choice = ui.select("What now?", [("retry", "Type a different address"), ("save", "Save it anyway (I'll start the server later)")],
+            choice = ui.select("What now?", [("retry", "Type a different address or password"), ("save", "Save it anyway (I'll start the server later)")],
                                cancel="retry")
             if choice != "save":
                 continue
-        name = ui.text_input("Name for this server", "home") or "home"
+        name = ui.text_input("Name for this server", "home")
+        if name is None:
+            return None
+        name = name or "home"
         while not NAME_RE.match(name):
-            name = ui.text_input("Use letters, digits, '.', '_' or '-'", "home") or "home"
-        server = store.add(name, url, api_key)
+            name = ui.text_input("Use letters, digits, '.', '_' or '-'", "home")
+            if name is None:
+                return None
+            name = name or "home"
+        server = store.add(name, url, key)
         store.use(name)
         ui.console.print(Text(f"  ✓ Saved as {name!r}. Change or add servers any time with /servers and /add_api_server.", style=ui.OK))
         ui.console.print()

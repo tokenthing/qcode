@@ -22,7 +22,7 @@ It works on macOS, Linux, Raspberry Pi and Windows, needs Python 3.9+, and doesn
 3. Asks for your model server (there's no built-in default), tests it, and lets you choose a default model. Skip it and qcode asks the first time it starts. Either way it's saved, so you only enter it once.
 4. If the server is unreachable, offers to install ZeroTier and join your network. The network owner then approves the device at my.zerotier.com.
 
-Run it again to reinstall. Flags: `--yes`, `--server ADDR --name NAME --model M`, `--reconfigure`, `--uninstall [--purge]`.
+Run it again to reinstall. Flags: `--yes`, `--server ADDR [--name NAME] [--model M] [--password KEY]`, `--reconfigure`, `--uninstall [--purge]`.
 
 **Sharing with family or friends:** create `installer/defaults.json` (it's git-ignored):
 ```json
@@ -68,7 +68,9 @@ Press **Shift+Tab** to cycle through them, or use `/mode <name>`. The startup de
 - permission mode
 - context size
 - default model
-- temperature
+- temperature (default: 0.8)
+- max completion tokens (default: 4096)
+- input token compression
 - auto-continue (nudges the model when it says "I'll do X" and stops)
 - read-before-overwrite protection
 - when to compact the history
@@ -91,7 +93,7 @@ On Ollama this updates the model on the server, so it applies to everyone using 
 
 | | |
 |---|---|
-| **Conversation** | `/clear` (restart qcode fresh; the old session stays saved) `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
+| **Conversation** | `/clear` (restart qcode fresh; the old session stays saved) `/retry` (ask again) `/undo` (revert last turn's file edits) `/compact` `/compress` (input token reduction / install) `/context` (token breakdown) `/copy` (last reply → clipboard) `/export [file]` (Markdown) `/resume [n]` `/save` |
 | **Models & servers** | `/model [name]` `/servers` (live ping) `/server <name>` `/add_api_server <name> <ip\|host:port\|url> [key]` `/remove_api_server <name>` |
 | **Project** | `/diff` (uncommitted git changes) `/init` (write QCODE.md) `/memory` `/cwd` |
 | **Web** | `/web <question>` (answers with web access on) · otherwise web tools turn on when you ask for something online |
