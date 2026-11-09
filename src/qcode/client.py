@@ -128,6 +128,7 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
         content: list[str] = []
+        reasoning: list[str] = []
         slots: dict[int, dict] = {}
         chunks = 0
         usage_tokens = 0
@@ -143,6 +144,9 @@ class LLMClient:
                 if delta.content:
                     content.append(delta.content)
                     on_text(delta.content)
+                r = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+                if r:
+                    reasoning.append(r)
                 for tc in delta.tool_calls or []:
                     key = tc.index if tc.index is not None else len(slots)
                     # Some servers send each complete call with index 0; a new id means a new call.
@@ -162,4 +166,8 @@ class LLMClient:
             for i, s in sorted(slots.items())
             if s["name"]
         ]
+        if not content and not calls and reasoning:
+            content_str = "".join(reasoning)
+            on_text(content_str)
+            return content_str, calls
         return "".join(content), calls
